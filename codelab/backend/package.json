@@ -4,7 +4,7 @@
   "description": "CodeLab Backend API",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/db/setup.js && node src/server.js",
     "dev": "nodemon src/server.js",
     "setup-db": "node src/db/setup.js"
   },
