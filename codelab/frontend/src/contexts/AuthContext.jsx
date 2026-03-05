@@ -13,7 +13,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (token) {
-      api.get('/auth/me')
+      api.get('/api/auth/me')
         .then(res => setUser(res.data.user))
         .catch(() => { localStorage.removeItem('token'); localStorage.removeItem('user'); })
         .finally(() => setLoading(false));
@@ -23,7 +23,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (username, password) => {
-    const res = await api.post('/auth/login', { username, password });
+    const res = await api.post('/api/auth/login', { username, password });
     const { token, user } = res.data;
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(user));
