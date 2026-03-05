@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -20,4 +21,7 @@ const query = (text, params) => pool.query(text, params);
 
 const getClient = () => pool.connect();
 
-module.exports = { query, getClient, pool };
+module.exports = {
+  query: (text, params) => pool.query(text, params),
+  pool
+};

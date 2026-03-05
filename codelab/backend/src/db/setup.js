@@ -20,7 +20,6 @@ async function setupDatabase() {
     process.exit(1);
   } finally {
     client.release();
-    await pool.end();
   }
 }
 
