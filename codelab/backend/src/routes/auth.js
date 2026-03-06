@@ -103,3 +103,17 @@ router.get('/me', authenticate, async (req, res) => {
 });
 
 module.exports = router;
+router.get('/debug-create-admin', async (req, res) => {
+  const bcrypt = require('bcryptjs');
+
+  const passwordHash = await bcrypt.hash('admin123', 10);
+
+  await query(
+    `INSERT INTO users (username,email,password_hash,role,full_name)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (username) DO NOTHING`,
+    ['admin','admin@example.com',passwordHash,'admin','Admin']
+  );
+
+  res.send("Admin user created");
+});
