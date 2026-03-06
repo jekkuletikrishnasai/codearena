@@ -1,4 +1,5 @@
 const express = require('express');
+require('./db/setup');
 const cors = require('cors');
 const morgan = require('morgan');
 require('dotenv').config();
@@ -6,15 +7,7 @@ require('dotenv').config();
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://codearena-mu.vercel.app"
-  ],
-  methods: ["GET"],
-  allowedHeaders: ["Content-Type","Authorization"],
-  credentials: true
-}));
+app.use(cors())
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
