@@ -1,129 +1,130 @@
-const { exec } = require('child_process');
-const fs = require('fs').promises;
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-const os = require('os');
+/**
+ * Code Execution Service — Piston API
+ *
+ * Piston is a free, open-source code execution engine.
+ * Public API at https://emkc.org/api/v2/piston — NO API KEY, NO rate limit.
+ * Supports 70+ languages. Built by Engineer Man, used by repl.it.
+ *
+ * No setup needed. Just deploy and it works.
+ *
+ * Optional: self-host Piston on Render for 100% uptime guarantee.
+ * See: https://github.com/engineer-man/piston
+ */
 
+const axios = require('axios');
+
+const PISTON_URL = (process.env.PISTON_URL || 'https://emkc.org/api/v2/piston').replace(/\/$/, '');
+
+// ── Language config for Piston ─────────────────────────────────────────────
+// Each entry: { language, version, filename }
+// Run GET https://emkc.org/api/v2/piston/runtimes to see all available versions
 const LANGUAGE_CONFIG = {
   python: {
-    image: 'python:3.11-slim',
+    language: 'python',
+    version: '3.10.0',
     filename: 'solution.py',
-    command: (file) => `python ${file}`,
-    extension: '.py',
   },
   javascript: {
-    image: 'node:18-slim',
+    language: 'javascript',
+    version: '18.15.0',
     filename: 'solution.js',
-    command: (file) => `node ${file}`,
-    extension: '.js',
   },
   java: {
-    image: 'openjdk:17-slim',
+    language: 'java',
+    version: '15.0.2',
     filename: 'Solution.java',
-    command: (file) => `javac ${file} && java Solution`,
-    extension: '.java',
   },
   cpp: {
-    image: 'gcc:12',
+    language: 'c++',
+    version: '10.2.0',
     filename: 'solution.cpp',
-    command: (file) => `g++ -o solution ${file} && ./solution`,
-    extension: '.cpp',
   },
   c: {
-    image: 'gcc:12',
+    language: 'c',
+    version: '10.2.0',
     filename: 'solution.c',
-    command: (file) => `gcc -o solution ${file} && ./solution`,
-    extension: '.c',
   },
 };
 
-const TIMEOUT_MS = parseInt(process.env.CODE_EXECUTION_TIMEOUT) || 10000;
-
+// ── Execute a single code + stdin via Piston ──────────────────────────────
 async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
   const config = LANGUAGE_CONFIG[language];
-  if (!config) {
-    throw new Error(`Unsupported language: ${language}`);
-  }
+  if (!config) throw new Error(`Unsupported language: ${language}`);
 
-  const executionId = uuidv4();
-  const tmpDir = path.join(os.tmpdir(), `codelab-${executionId}`);
+  const startTime = Date.now();
 
+  let response;
   try {
-    await fs.mkdir(tmpDir, { recursive: true });
-    const codeFile = path.join(tmpDir, config.filename);
-    const inputFile = path.join(tmpDir, 'input.txt');
-    await fs.writeFile(codeFile, code);
-    await fs.writeFile(inputFile, stdin);
-
-    const dockerCmd = buildDockerCommand(config, codeFile, inputFile, tmpDir, timeLimitMs);
-
-    const startTime = Date.now();
-    const result = await runCommand(dockerCmd, TIMEOUT_MS);
-    const executionTime = Date.now() - startTime;
-
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      executionTimeMs: executionTime,
-      timedOut: result.timedOut,
-    };
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    response = await axios.post(
+      `${PISTON_URL}/execute`,
+      {
+        language: config.language,
+        version: config.version,
+        files: [{ name: config.filename, content: code }],
+        stdin: stdin || '',
+        run_timeout: timeLimitMs,
+        compile_timeout: 10000,
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: timeLimitMs + 15000, // axios timeout > execution timeout
+      }
+    );
+  } catch (err) {
+    // Network / Piston down
+    throw new Error(`Piston API error: ${err.message}`);
   }
+
+  const data = response.data;
+  const executionTimeMs = Date.now() - startTime;
+
+  // Piston returns { run: { stdout, stderr, code, signal, output } }
+  // and optionally { compile: { stdout, stderr, code } } for compiled langs
+  const compileStderr = data.compile?.stderr || '';
+  const compileCode   = data.compile?.code;
+
+  // Compilation failed
+  if (compileCode !== undefined && compileCode !== 0) {
+    return {
+      stdout: '',
+      stderr: compileStderr || data.compile?.output || 'Compilation failed',
+      exitCode: compileCode,
+      executionTimeMs,
+      timedOut: false,
+      compilationError: true,
+    };
+  }
+
+  const run = data.run || {};
+  const stdout  = run.stdout || '';
+  const stderr  = run.stderr || '';
+  const exitCode = run.code ?? (run.signal ? 1 : 0);
+  const timedOut = run.signal === 'SIGKILL' || (timeLimitMs && executionTimeMs >= timeLimitMs + 14000);
+
+  return {
+    stdout,
+    stderr,
+    exitCode,
+    executionTimeMs,
+    timedOut,
+    compilationError: false,
+  };
 }
 
-function buildDockerCommand(config, codeFile, inputFile, tmpDir, timeLimitMs) {
-  const timeoutSec = Math.ceil(timeLimitMs / 1000) + 2;
-  const filename = path.basename(codeFile);
-  const cmd = config.command(filename);
-
-  return [
-    'docker run',
-    '--rm',
-    '--network none',
-    '--memory 256m',
-    '--memory-swap 256m',
-    '--cpus 0.5',
-    `--ulimit nproc=50:50`,
-    `--ulimit nofile=64:64`,
-    `-v "${tmpDir}:/sandbox"`,
-    '-w /sandbox',
-    `--timeout ${timeLimitMs / 1000}`,
-    `${config.image}`,
-    `timeout ${timeoutSec} sh -c "${cmd} < input.txt"`,
-  ].join(' ');
-}
-
-function runCommand(cmd, timeout) {
-  return new Promise((resolve) => {
-    let timedOut = false;
-    const process = exec(cmd, { timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      resolve({
-        stdout: stdout || '',
-        stderr: stderr || '',
-        exitCode: error ? (error.code || 1) : 0,
-        timedOut,
-      });
-    });
-
-    setTimeout(() => {
-      timedOut = true;
-    }, timeout);
-  });
-}
-
+// ── Run all test cases ────────────────────────────────────────────────────
 async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   const results = [];
 
   for (const testCase of testCases) {
     try {
       const result = await executeCode(code, language, testCase.input, timeLimitMs);
-      const actualOutput = result.stdout.trim();
+      const actualOutput   = result.stdout.trim();
       const expectedOutput = testCase.expected_output.trim();
 
       let status;
-      if (result.timedOut) {
+      if (result.compilationError) {
+        status = 'runtime_error'; // treated as compile/runtime error
+      } else if (result.timedOut) {
         status = 'time_limit_exceeded';
       } else if (result.exitCode !== 0) {
         status = 'runtime_error';
@@ -134,21 +135,22 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
       }
 
       results.push({
-        testCaseId: testCase.id,
+        testCaseId:      testCase.id,
         status,
-        actualOutput: result.stdout,
+        actualOutput:    result.stdout,
         executionTimeMs: result.executionTimeMs,
-        expected: expectedOutput,
-        isHidden: testCase.is_hidden,
+        expected:        expectedOutput,
+        isHidden:        testCase.is_hidden,
       });
     } catch (err) {
+      console.error('Piston execution error:', err.message);
       results.push({
-        testCaseId: testCase.id,
-        status: 'runtime_error',
-        actualOutput: err.message,
+        testCaseId:      testCase.id,
+        status:          'runtime_error',
+        actualOutput:    `Execution error: ${err.message}`,
         executionTimeMs: 0,
-        expected: testCase.expected_output,
-        isHidden: testCase.is_hidden,
+        expected:        testCase.expected_output,
+        isHidden:        testCase.is_hidden,
       });
     }
   }
@@ -156,41 +158,10 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   return results;
 }
 
-// Fallback: simulate execution when Docker is not available
-async function executeCodeSimulated(code, language, stdin = '') {
-  await new Promise(r => setTimeout(r, 300 + Math.random() * 700));
-  return {
-    stdout: `Simulated output for ${language}\n(Docker not available - configure Docker for real execution)`,
-    stderr: '',
-    exitCode: 0,
-    executionTimeMs: Math.floor(Math.random() * 500) + 100,
-    timedOut: false,
-    simulated: true,
-  };
-}
-
-async function runTestCasesSimulated(code, language, testCases) {
-  const results = [];
-  for (const testCase of testCases) {
-    await new Promise(r => setTimeout(r, 100));
-    const passed = Math.random() > 0.3;
-    results.push({
-      testCaseId: testCase.id,
-      status: passed ? 'passed' : 'failed',
-      actualOutput: passed ? testCase.expected_output : 'Wrong output',
-      executionTimeMs: Math.floor(Math.random() * 200) + 50,
-      expected: testCase.expected_output,
-      isHidden: testCase.is_hidden,
-    });
-  }
-  return results;
-}
-
-const isDockerAvailable = () => {
-  return new Promise(resolve => {
-    exec('docker info', (err) => resolve(!err));
-  });
-};
+// ── Shims for backwards compatibility with submissions.js ─────────────────
+const executeCodeSimulated = executeCode;
+const runTestCasesSimulated = runTestCases;
+const isDockerAvailable = () => Promise.resolve(true); // always "available"
 
 module.exports = {
   executeCode,

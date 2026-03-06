@@ -296,22 +296,33 @@ export default function StudentProblem() {
 
             {/* Stdout */}
             <div className="flex-1 flex flex-col">
-              <div className="flex items-center px-4 py-2 bg-gray-900 border-b border-gray-800">
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
                 <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">stdout</span>
-                {output?.simulated && <span className="ml-2 text-xs text-yellow-500">(simulated)</span>}
+                {output && !running && (
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                    output.exitCode === 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                  }`}>
+                    {output.exitCode === 0 ? '✓ OK' : '✗ Error'} · {output.executionTimeMs}ms
+                  </span>
+                )}
               </div>
               <div className="flex-1 p-3 overflow-auto">
                 {running ? (
                   <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <Loader size={12} className="animate-spin" /> Running...
+                    <Loader size={12} className="animate-spin" /> Running on Piston...
                   </div>
                 ) : output ? (
                   <div>
-                    {output.stdout && <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>}
-                    {output.stderr && <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap mt-2">{output.stderr}</pre>}
-                    <div className="text-xs text-gray-600 mt-2">
-                      Exit: {output.exitCode} · {output.executionTimeMs}ms
-                    </div>
+                    {output.stdout
+                      ? <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>
+                      : <p className="text-xs text-gray-600 italic">no output</p>
+                    }
+                    {output.stderr && (
+                      <div className="mt-2 border-t border-gray-800 pt-2">
+                        <p className="text-xs text-red-500 mb-1">stderr / compile error:</p>
+                        <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap">{output.stderr}</pre>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-xs text-gray-700 font-mono">Run your code to see output here</p>
