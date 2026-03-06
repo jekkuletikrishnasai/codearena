@@ -24,6 +24,44 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+
+// DIAGNOSTIC — visit /api/diag to see exact binary paths on this server
+app.get('/api/diag', (req, res) => {
+  const { execSync } = require('child_process');
+  const os = require('os');
+  
+  const run = (cmd) => {
+    try { return execSync(cmd, { encoding: 'utf8', timeout: 3000 }).trim(); }
+    catch(e) { return `ERROR: ${e.message.split('\n')[0]}`; }
+  };
+
+  res.json({
+    PATH: process.env.PATH,
+    execPath: process.execPath,
+    platform: process.platform,
+    which: {
+      python3:  run('which python3'),
+      python:   run('which python'),
+      node:     run('which node'),
+      nodejs:   run('which nodejs'),
+      java:     run('which java'),
+      gcc:      run('which gcc'),
+      gpp:      run('which g++'),
+    },
+    versions: {
+      python3:  run('python3 --version'),
+      node:     run('node --version'),
+      java:     run('java --version'),
+      gcc:      run('gcc --version'),
+    },
+    ls_usr_bin:   run('ls /usr/bin/python* /usr/bin/node* /usr/bin/java* /usr/bin/gcc* /usr/bin/g++* 2>/dev/null'),
+    ls_usr_local: run('ls /usr/local/bin/python* /usr/local/bin/node* 2>/dev/null'),
+    ls_opt:       run('ls /opt/ 2>/dev/null'),
+    homedir: os.homedir(),
+    tmpdir:  os.tmpdir(),
+  });
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
