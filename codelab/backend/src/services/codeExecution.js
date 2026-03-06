@@ -1,117 +1,214 @@
 /**
- * Code Execution Service — Piston API
+ * Code Execution Service — Multi-Provider with Fallback
  *
- * Piston is a free, open-source code execution engine.
- * Public API at https://emkc.org/api/v2/piston — NO API KEY, NO rate limit.
- * Supports 70+ languages. Built by Engineer Man, used by repl.it.
+ * Tries providers in order until one succeeds. All are FREE, no keys needed.
  *
- * No setup needed. Just deploy and it works.
+ * Provider 1: Glot.io        — https://glot.io (free, open, no key needed in anon mode)
+ * Provider 2: Codex API      — https://api.codex.jaagrav.in (free, no key)
+ * Provider 3: JDoodle        — https://api.jdoodle.com (free 200 req/day with free key)
  *
- * Optional: self-host Piston on Render for 100% uptime guarantee.
- * See: https://github.com/engineer-man/piston
+ * Set in Render environment (optional - has sensible defaults):
+ *   CODE_PROVIDER=glot        (or "codex" or "jdoodle")
+ *   JDOODLE_CLIENT_ID=xxx     (only if using jdoodle)
+ *   JDOODLE_CLIENT_SECRET=xxx (only if using jdoodle)
  */
 
 const axios = require('axios');
 
-const PISTON_URL = (process.env.PISTON_URL || 'https://emkc.org/api/v2/piston').replace(/\/$/, '');
+// ── Which provider to use (env override or auto) ───────────────────────────
+const PREFERRED = (process.env.CODE_PROVIDER || 'glot').toLowerCase();
 
-// ── Language config for Piston ─────────────────────────────────────────────
-// Each entry: { language, version, filename }
-// Run GET https://emkc.org/api/v2/piston/runtimes to see all available versions
-const LANGUAGE_CONFIG = {
-  python: {
-    language: 'python',
-    version: '3.10.0',
-    filename: 'solution.py',
-  },
-  javascript: {
-    language: 'javascript',
-    version: '18.15.0',
-    filename: 'solution.js',
-  },
-  java: {
-    language: 'java',
-    version: '15.0.2',
-    filename: 'Solution.java',
-  },
-  cpp: {
-    language: 'c++',
-    version: '10.2.0',
-    filename: 'solution.cpp',
-  },
-  c: {
-    language: 'c',
-    version: '10.2.0',
-    filename: 'solution.c',
-  },
+// ── Glot.io language map ───────────────────────────────────────────────────
+const GLOT_LANGUAGES = {
+  python:     { language: 'python',     filename: 'main.py',   version: 'latest' },
+  javascript: { language: 'javascript', filename: 'main.js',   version: 'latest' },
+  java:       { language: 'java',       filename: 'Main.java',  version: 'latest' },
+  cpp:        { language: 'cpp',        filename: 'main.cpp',  version: 'latest' },
+  c:          { language: 'c',          filename: 'main.c',    version: 'latest' },
 };
 
-// ── Execute a single code + stdin via Piston ──────────────────────────────
-async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
-  const config = LANGUAGE_CONFIG[language];
-  if (!config) throw new Error(`Unsupported language: ${language}`);
+// ── Codex API language map ─────────────────────────────────────────────────
+const CODEX_LANGUAGES = {
+  python:     'py',
+  javascript: 'js',
+  java:       'java',
+  cpp:        'cpp',
+  c:          'c',
+};
+
+// ── JDoodle language map ───────────────────────────────────────────────────
+const JDOODLE_LANGUAGES = {
+  python:     { language: 'python3',    versionIndex: '4' },
+  javascript: { language: 'nodejs',     versionIndex: '4' },
+  java:       { language: 'java',       versionIndex: '4' },
+  cpp:        { language: 'cpp17',      versionIndex: '1' },
+  c:          { language: 'c',          versionIndex: '5' },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 1: Glot.io (anonymous mode, no key needed)
+// ─────────────────────────────────────────────────────────────────────────────
+async function executeWithGlot(code, language, stdin, timeLimitMs) {
+  const config = GLOT_LANGUAGES[language];
+  if (!config) throw new Error(`Glot: unsupported language ${language}`);
 
   const startTime = Date.now();
 
-  let response;
-  try {
-    response = await axios.post(
-      `${PISTON_URL}/execute`,
-      {
-        language: config.language,
-        version: config.version,
-        files: [{ name: config.filename, content: code }],
-        stdin: stdin || '',
-        run_timeout: timeLimitMs,
-        compile_timeout: 10000,
+  const response = await axios.post(
+    `https://glot.io/api/run/${config.language}/${config.version}`,
+    {
+      files: [{ name: config.filename, content: code }],
+      stdin: stdin || '',
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        // No auth header = anonymous execution
       },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: timeLimitMs + 15000, // axios timeout > execution timeout
-      }
-    );
-  } catch (err) {
-    // Network / Piston down
-    throw new Error(`Piston API error: ${err.message}`);
-  }
+      timeout: timeLimitMs + 10000,
+    }
+  );
 
   const data = response.data;
-  const executionTimeMs = Date.now() - startTime;
-
-  // Piston returns { run: { stdout, stderr, code, signal, output } }
-  // and optionally { compile: { stdout, stderr, code } } for compiled langs
-  const compileStderr = data.compile?.stderr || '';
-  const compileCode   = data.compile?.code;
-
-  // Compilation failed
-  if (compileCode !== undefined && compileCode !== 0) {
-    return {
-      stdout: '',
-      stderr: compileStderr || data.compile?.output || 'Compilation failed',
-      exitCode: compileCode,
-      executionTimeMs,
-      timedOut: false,
-      compilationError: true,
-    };
-  }
-
-  const run = data.run || {};
-  const stdout  = run.stdout || '';
-  const stderr  = run.stderr || '';
-  const exitCode = run.code ?? (run.signal ? 1 : 0);
-  const timedOut = run.signal === 'SIGKILL' || (timeLimitMs && executionTimeMs >= timeLimitMs + 14000);
+  const stdout = data.stdout || '';
+  const stderr = data.stderr || data.error || '';
+  const exitCode = stderr && !stdout ? 1 : 0;
 
   return {
     stdout,
     stderr,
     exitCode,
-    executionTimeMs,
-    timedOut,
-    compilationError: false,
+    executionTimeMs: Date.now() - startTime,
+    timedOut: false,
+    provider: 'glot',
   };
 }
 
-// ── Run all test cases ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 2: Codex API by Jaagrav (completely free, no key, no rate limit)
+// ─────────────────────────────────────────────────────────────────────────────
+async function executeWithCodex(code, language, stdin, timeLimitMs) {
+  const lang = CODEX_LANGUAGES[language];
+  if (!lang) throw new Error(`Codex: unsupported language ${language}`);
+
+  const startTime = Date.now();
+
+  const params = new URLSearchParams();
+  params.append('code', code);
+  params.append('language', lang);
+  params.append('input', stdin || '');
+
+  const response = await axios.post(
+    'https://api.codex.jaagrav.in',
+    params,
+    {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: timeLimitMs + 15000,
+    }
+  );
+
+  const data = response.data;
+  // Codex returns: { output, error, language, info }
+  const stdout  = data.output || '';
+  const stderr  = data.error  || '';
+  const exitCode = data.error ? 1 : 0;
+
+  return {
+    stdout,
+    stderr,
+    exitCode,
+    executionTimeMs: Date.now() - startTime,
+    timedOut: false,
+    provider: 'codex',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 3: JDoodle (200 req/day free — needs free credentials)
+// Get free credentials at: https://www.jdoodle.com/compiler-api/
+// ─────────────────────────────────────────────────────────────────────────────
+async function executeWithJDoodle(code, language, stdin, timeLimitMs) {
+  const config = JDOODLE_LANGUAGES[language];
+  if (!config) throw new Error(`JDoodle: unsupported language ${language}`);
+
+  const clientId     = process.env.JDOODLE_CLIENT_ID;
+  const clientSecret = process.env.JDOODLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error('JDoodle: credentials not configured');
+
+  const startTime = Date.now();
+
+  const response = await axios.post(
+    'https://api.jdoodle.com/v1/execute',
+    {
+      script:        code,
+      stdin:         stdin || '',
+      language:      config.language,
+      versionIndex:  config.versionIndex,
+      clientId,
+      clientSecret,
+    },
+    {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: timeLimitMs + 10000,
+    }
+  );
+
+  const data = response.data;
+  const stdout  = data.output || '';
+  const stderr  = '';
+  const exitCode = data.statusCode === 200 ? 0 : 1;
+
+  return {
+    stdout,
+    stderr,
+    exitCode,
+    executionTimeMs: Date.now() - startTime,
+    timedOut: false,
+    provider: 'jdoodle',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN executeCode — tries providers in order, falls back on error
+// ─────────────────────────────────────────────────────────────────────────────
+async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
+  if (!GLOT_LANGUAGES[language]) throw new Error(`Unsupported language: ${language}`);
+
+  // Build ordered provider list based on preference
+  const providers = [];
+
+  if (PREFERRED === 'jdoodle' && process.env.JDOODLE_CLIENT_ID) {
+    providers.push({ name: 'jdoodle', fn: executeWithJDoodle });
+    providers.push({ name: 'codex',   fn: executeWithCodex });
+    providers.push({ name: 'glot',    fn: executeWithGlot });
+  } else if (PREFERRED === 'codex') {
+    providers.push({ name: 'codex',   fn: executeWithCodex });
+    providers.push({ name: 'glot',    fn: executeWithGlot });
+  } else {
+    // Default: glot first, codex as fallback
+    providers.push({ name: 'glot',    fn: executeWithGlot });
+    providers.push({ name: 'codex',   fn: executeWithCodex });
+  }
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      console.log(`[codeExecution] trying provider: ${provider.name}`);
+      const result = await provider.fn(code, language, stdin, timeLimitMs);
+      console.log(`[codeExecution] success with: ${provider.name}`);
+      return result;
+    } catch (err) {
+      console.error(`[codeExecution] ${provider.name} failed: ${err.message}`);
+      lastError = err;
+    }
+  }
+
+  throw new Error(`All execution providers failed. Last error: ${lastError?.message}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Run all test cases
+// ─────────────────────────────────────────────────────────────────────────────
 async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   const results = [];
 
@@ -122,9 +219,7 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
       const expectedOutput = testCase.expected_output.trim();
 
       let status;
-      if (result.compilationError) {
-        status = 'runtime_error'; // treated as compile/runtime error
-      } else if (result.timedOut) {
+      if (result.timedOut) {
         status = 'time_limit_exceeded';
       } else if (result.exitCode !== 0) {
         status = 'runtime_error';
@@ -143,7 +238,7 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
         isHidden:        testCase.is_hidden,
       });
     } catch (err) {
-      console.error('Piston execution error:', err.message);
+      console.error('Execution error for test case:', err.message);
       results.push({
         testCaseId:      testCase.id,
         status:          'runtime_error',
@@ -158,10 +253,10 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   return results;
 }
 
-// ── Shims for backwards compatibility with submissions.js ─────────────────
-const executeCodeSimulated = executeCode;
-const runTestCasesSimulated = runTestCases;
-const isDockerAvailable = () => Promise.resolve(true); // always "available"
+// Shims for backwards compatibility with submissions.js
+const executeCodeSimulated    = executeCode;
+const runTestCasesSimulated   = runTestCases;
+const isDockerAvailable       = () => Promise.resolve(true);
 
 module.exports = {
   executeCode,
@@ -169,5 +264,4 @@ module.exports = {
   executeCodeSimulated,
   runTestCasesSimulated,
   isDockerAvailable,
-  LANGUAGE_CONFIG,
 };
