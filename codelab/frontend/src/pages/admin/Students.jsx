@@ -9,13 +9,13 @@ export default function AdminStudents() {
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ username: '', email: '', password: '', fullName: '' });
 
-  const load = () => api.get('/users/students').then(r => setStudents(r.data.students)).finally(() => setLoading(false));
+  const load = () => api.get('/api/users/students').then(r => setStudents(r.data.students)).finally(() => setLoading(false));
   useEffect(load, []);
 
   const createStudent = async () => {
     if (!form.username || !form.email || !form.password || !form.fullName) return toast.error('All fields required');
     try {
-      await api.post('/users/students', form);
+      await api.post('/api/users/students', form);
       toast.success('Student created');
       setShowModal(false);
       setForm({ username: '', email: '', password: '', fullName: '' });
@@ -25,7 +25,7 @@ export default function AdminStudents() {
 
   const deleteStudent = async (id, name) => {
     if (!window.confirm(`Remove ${name}?`)) return;
-    await api.delete(`/users/${id}`);
+    await api.delete(`/api/users/${id}`);
     toast.success('Student removed');
     load();
   };

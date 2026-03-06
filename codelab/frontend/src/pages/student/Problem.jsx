@@ -38,7 +38,7 @@ export default function StudentProblem() {
   const [descExpanded, setDescExpanded] = useState(true);
 
   useEffect(() => {
-    api.get(`/problems/${id}`).then(res => {
+    api.get(`/api/problems/${id}`).then(res => {
       const p = res.data.problem;
       setProblem(p);
       const allowed = p.allowed_languages[0] || 'python';
@@ -59,7 +59,7 @@ export default function StudentProblem() {
     setRunning(true);
     setOutput(null);
     try {
-      const res = await api.post('/submissions/run', { code, language, stdin });
+      const res = await api.post('/api/submissions/run', { code, language, stdin });
       setOutput(res.data);
     } catch (err) {
       toast.error('Run failed');
@@ -72,7 +72,7 @@ export default function StudentProblem() {
     setSubmitting(true);
     setSubmissionResult(null);
     try {
-      const res = await api.post('/submissions', { problemId: id, language, code });
+      const res = await api.post('/api/submissions', { problemId: id, language, code });
       const sid = res.data.submission.id;
       setSubmissionId(sid);
       setActiveTab('results');
@@ -91,7 +91,7 @@ export default function StudentProblem() {
     const interval = setInterval(async () => {
       attempts++;
       try {
-        const res = await api.get(`/submissions/${sid}`);
+        const res = await api.get(`/api/submissions/${sid}`);
         const sub = res.data.submission;
         if (sub.status !== 'running' && sub.status !== 'pending') {
           setSubmissionResult(sub);

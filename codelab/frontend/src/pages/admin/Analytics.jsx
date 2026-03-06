@@ -28,12 +28,12 @@ export default function AdminAnalytics() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/analytics/dashboard').then(res => setData(res.data)).finally(() => setLoading(false));
+    api.get('/api/analytics/dashboard').then(res => setData(res.data)).finally(() => setLoading(false));
   }, []);
 
   const downloadReport = async () => {
     try {
-      const res = await api.get('/analytics/report', { responseType: 'blob' });
+      const res = await api.get('/api/analytics/report', { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;

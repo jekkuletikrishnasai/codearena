@@ -25,11 +25,11 @@ export default function StudentSubmissions() {
   const [selected, setSelected] = useState(null);
 
   useEffect(() => {
-    api.get('/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
+    api.get('/api/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
   }, []);
 
   const viewDetail = async (id) => {
-    const res = await api.get(`/submissions/${id}`);
+    const res = await api.get(`/api/submissions/${id}`);
     setSelected(res.data.submission);
   };
 

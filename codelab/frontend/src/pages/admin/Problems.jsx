@@ -16,7 +16,7 @@ export default function AdminProblems() {
   const [filter, setFilter] = useState('all');
 
   const load = () => {
-    api.get('/problems').then(res => setProblems(res.data.problems)).finally(() => setLoading(false));
+    api.get('/api/problems').then(res => setProblems(res.data.problems)).finally(() => setLoading(false));
   };
 
   useEffect(load, []);
@@ -24,7 +24,7 @@ export default function AdminProblems() {
   const deleteProblem = async (id, title) => {
     if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
     try {
-      await api.delete(`/problems/${id}`);
+      await api.delete(`/api/problems/${id}`);
       toast.success('Problem deleted');
       load();
     } catch { toast.error('Failed to delete'); }

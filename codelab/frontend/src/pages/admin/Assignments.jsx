@@ -14,9 +14,9 @@ export default function AdminAssignments() {
 
   const load = () => {
     Promise.all([
-      api.get('/assignments'),
-      api.get('/problems'),
-      api.get('/users/students'),
+      api.get('/api/assignments'),
+      api.get('/api/problems'),
+      api.get('/api/users/students'),
     ]).then(([a, p, s]) => {
       setAssignments(a.data.assignments);
       setProblems(p.data.problems);
@@ -33,7 +33,7 @@ export default function AdminAssignments() {
   };
 
   const openEdit = async (id) => {
-    const res = await api.get(`/assignments/${id}`);
+    const res = await api.get(`/api/assignments/${id}`);
     const a = res.data.assignment;
     setForm({
       title: a.title,
@@ -50,10 +50,10 @@ export default function AdminAssignments() {
     if (!form.title) return toast.error('Title required');
     try {
       if (editingId) {
-        await api.put(`/assignments/${editingId}`, form);
+        await api.put(`/api/assignments/${editingId}`, form);
         toast.success('Assignment updated');
       } else {
-        await api.post('/assignments', form);
+        await api.post('/api/assignments', form);
         toast.success('Assignment created');
       }
       setShowModal(false);
@@ -63,7 +63,7 @@ export default function AdminAssignments() {
 
   const deleteAssignment = async (id, title) => {
     if (!window.confirm(`Delete "${title}"?`)) return;
-    await api.delete(`/assignments/${id}`);
+    await api.delete(`/api/assignments/${id}`);
     toast.success('Deleted');
     load();
   };

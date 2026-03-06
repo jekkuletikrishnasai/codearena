@@ -30,13 +30,13 @@ export default function AdminSubmissions() {
 
   const load = () => {
     setLoading(true);
-    api.get('/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
+    api.get('/api/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
 
   const viewSubmission = async (id) => {
-    const res = await api.get(`/submissions/${id}`);
+    const res = await api.get(`/api/submissions/${id}`);
     setSelected(res.data.submission);
   };
 

@@ -26,7 +26,7 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.get('/assignments'), api.get('/problems')])
+    Promise.all([api.get('/api/assignments'), api.get('/api/problems')])
       .then(([a, p]) => {
         setAssignments(a.data.assignments);
         setProblems(p.data.problems);

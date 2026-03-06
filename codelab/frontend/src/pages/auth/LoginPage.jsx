@@ -220,7 +220,7 @@ function RegisterForm({ onSwitch }) {
       setDone(true);
       toast.success('Account created! Signing you in…');
       // auto-login
-      await login(form.username.toLowerCase(), form.password);
+      await login(form.username, form.password);
       navigate('/student');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Registration failed');

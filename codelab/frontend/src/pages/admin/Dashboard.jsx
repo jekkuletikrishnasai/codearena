@@ -29,8 +29,8 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     Promise.all([
-      api.get('/analytics/dashboard'),
-      api.get('/submissions?limit=5'),
+      api.get('/api/analytics/dashboard'),
+      api.get('/api/submissions?limit=5'),
     ]).then(([analyticsRes, subRes]) => {
       setStats(analyticsRes.data.summary);
       setRecentSubs(subRes.data.submissions.slice(0, 8));
