@@ -210,7 +210,7 @@ function RegisterForm({ onSwitch }) {
 
     setLoading(true);
     try {
-      await api.post('/auth/register', {
+      await api.post('/register', {
         username: form.username.toLowerCase(),
         email: form.email.toLowerCase(),
         password: form.password,
