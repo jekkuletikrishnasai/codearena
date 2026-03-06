@@ -23,4 +23,4 @@ async function setupDatabase() {
   }
 }
 
-module.exports = setupDatabase;
+setupDatabase();
