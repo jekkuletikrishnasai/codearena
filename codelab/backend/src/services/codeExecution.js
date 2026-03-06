@@ -1,54 +1,87 @@
 /**
  * Code Execution Service — Local child_process
- *
- * Uses full absolute binary paths (avoids Render's restricted PATH).
- * All 5 languages work on Render free tier:
- *
- *   Python     → /usr/bin/python3       (Python 3.12)
- *   JavaScript → /usr/bin/node          (Node.js 20+)
- *   Java       → /usr/bin/java file.java (Java 21 single-file, no javac needed!)
- *   C++        → /usr/bin/g++           (GCC 13)
- *   C          → /usr/bin/gcc           (GCC 13)
+ * Dynamically finds binary paths at startup so it works
+ * regardless of where Render installs node/python/etc.
  */
 
-const { exec } = require('child_process');
-const fs       = require('fs').promises;
-const path     = require('path');
-const os       = require('os');
+const { exec, execSync } = require('child_process');
+const fs   = require('fs').promises;
+const path = require('path');
+const os   = require('os');
 const { v4: uuidv4 } = require('uuid');
 
-const LANGUAGE_CONFIG = {
-  python: {
-    filename: 'solution.py',
-    run: (dir) => `/usr/bin/python3 "${dir}/solution.py" < "${dir}/input.txt"`,
-  },
-  javascript: {
-    filename: 'solution.js',
-    run: (dir) => `/usr/bin/node "${dir}/solution.js" < "${dir}/input.txt"`,
-  },
-  // Java 11+ supports running .java files directly: java Solution.java
-  // No javac needed! Class must be named Solution.
-  java: {
-    filename: 'Solution.java',
-    run: (dir) => `cd "${dir}" && /usr/bin/java Solution.java < input.txt`,
-  },
-  cpp: {
-    filename: 'solution.cpp',
-    run: (dir) =>
-      `/usr/bin/g++ -o "${dir}/solution_bin" "${dir}/solution.cpp" && "${dir}/solution_bin" < "${dir}/input.txt"`,
-  },
-  c: {
-    filename: 'solution.c',
-    run: (dir) =>
-      `/usr/bin/gcc -o "${dir}/solution_bin" "${dir}/solution.c" && "${dir}/solution_bin" < "${dir}/input.txt"`,
-  },
+// ── Find binary path dynamically at startup ──────────────────────────────
+function findBin(names) {
+  for (const name of names) {
+    try {
+      const p = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
+      if (p) { console.log(`[exec] found ${name} at ${p}`); return p; }
+    } catch (_) {}
+  }
+  return names[0]; // fallback, will fail gracefully
+}
+
+// Resolved once at server startup
+const BINS = {
+  python3: findBin(['python3', 'python3.12', 'python']),
+  node:    findBin(['node', 'nodejs']),
+  java:    findBin(['java']),
+  gpp:     findBin(['g++', 'g++-13']),
+  gcc:     findBin(['gcc', 'gcc-13']),
 };
+
+console.log('[exec] resolved binaries:', BINS);
+
+// ── Language config using resolved paths ────────────────────────────────
+function getLanguageConfig() {
+  return {
+    python: {
+      filename: 'solution.py',
+      run: (dir) => `"${BINS.python3}" "${dir}/solution.py" < "${dir}/input.txt"`,
+    },
+    javascript: {
+      filename: 'solution.js',
+      run: (dir) => `"${BINS.node}" "${dir}/solution.js" < "${dir}/input.txt"`,
+    },
+    // Java 11+ single-file: java Solution.java (no javac needed)
+    java: {
+      filename: 'Solution.java',
+      run: (dir) => `cd "${dir}" && "${BINS.java}" Solution.java < input.txt`,
+    },
+    cpp: {
+      filename: 'solution.cpp',
+      run: (dir) =>
+        `"${BINS.gpp}" -o "${dir}/sol" "${dir}/solution.cpp" && "${dir}/sol" < "${dir}/input.txt"`,
+    },
+    c: {
+      filename: 'solution.c',
+      run: (dir) =>
+        `"${BINS.gcc}" -o "${dir}/sol" "${dir}/solution.c" && "${dir}/sol" < "${dir}/input.txt"`,
+    },
+  };
+}
 
 function runCommand(cmd, timeoutMs) {
   return new Promise((resolve) => {
     exec(
       cmd,
-      { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, shell: '/bin/sh' },
+      {
+        timeout:   timeoutMs,
+        maxBuffer: 2 * 1024 * 1024,
+        shell:     '/bin/sh',
+        env: {
+          ...process.env,
+          // Ensure all common bin locations are in PATH
+          PATH: [
+            process.env.PATH,
+            '/usr/local/bin',
+            '/usr/bin',
+            '/bin',
+            '/usr/local/sbin',
+            '/usr/sbin',
+          ].filter(Boolean).join(':'),
+        },
+      },
       (error, stdout, stderr) => {
         resolve({
           stdout:   stdout || '',
@@ -62,6 +95,7 @@ function runCommand(cmd, timeoutMs) {
 }
 
 async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
+  const LANGUAGE_CONFIG = getLanguageConfig();
   const config = LANGUAGE_CONFIG[language];
   if (!config) throw new Error(`Unsupported language: ${language}`);
 
@@ -89,7 +123,6 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
 
 async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   const results = [];
-
   for (const testCase of testCases) {
     try {
       const result         = await executeCode(code, language, testCase.input, timeLimitMs);
@@ -121,7 +154,6 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
       });
     }
   }
-
   return results;
 }
 
