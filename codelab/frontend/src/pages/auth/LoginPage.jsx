@@ -210,7 +210,7 @@ function RegisterForm({ onSwitch }) {
 
     setLoading(true);
     try {
-      await api.post('/register', {
+      await api.post('/api/auth/register', {
         username: form.username.toLowerCase(),
         email: form.email.toLowerCase(),
         password: form.password,
@@ -220,7 +220,7 @@ function RegisterForm({ onSwitch }) {
       setDone(true);
       toast.success('Account created! Signing you in…');
       // auto-login
-      await login(form.username, form.password);
+      await login(form.username.toLowerCase(), form.password);
       navigate('/student');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Registration failed');
