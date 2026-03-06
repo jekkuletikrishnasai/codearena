@@ -1,11 +1,14 @@
 /**
  * Code Execution Service — Local child_process
  *
- * Runs code directly on the server using the runtimes already
- * installed on Render's Ubuntu instances:
- *   python3, node, java (OpenJDK 21), gcc, g++
+ * Uses full absolute binary paths (avoids Render's restricted PATH).
+ * All 5 languages work on Render free tier:
  *
- * No external API. No Docker. No keys. Works on Render free tier.
+ *   Python     → /usr/bin/python3       (Python 3.12)
+ *   JavaScript → /usr/bin/node          (Node.js 20+)
+ *   Java       → /usr/bin/java file.java (Java 21 single-file, no javac needed!)
+ *   C++        → /usr/bin/g++           (GCC 13)
+ *   C          → /usr/bin/gcc           (GCC 13)
  */
 
 const { exec } = require('child_process');
@@ -17,38 +20,41 @@ const { v4: uuidv4 } = require('uuid');
 const LANGUAGE_CONFIG = {
   python: {
     filename: 'solution.py',
-    run: (dir) => `cd "${dir}" && python3 solution.py < input.txt`,
+    run: (dir) => `/usr/bin/python3 "${dir}/solution.py" < "${dir}/input.txt"`,
   },
   javascript: {
     filename: 'solution.js',
-    run: (dir) => `cd "${dir}" && node solution.js < input.txt`,
+    run: (dir) => `/usr/bin/node "${dir}/solution.js" < "${dir}/input.txt"`,
   },
+  // Java 11+ supports running .java files directly: java Solution.java
+  // No javac needed! Class must be named Solution.
   java: {
     filename: 'Solution.java',
-    run: (dir) => `cd "${dir}" && javac Solution.java && java Solution < input.txt`,
+    run: (dir) => `cd "${dir}" && /usr/bin/java Solution.java < input.txt`,
   },
   cpp: {
     filename: 'solution.cpp',
-    run: (dir) => `cd "${dir}" && g++ -o solution solution.cpp && ./solution < input.txt`,
+    run: (dir) =>
+      `/usr/bin/g++ -o "${dir}/solution_bin" "${dir}/solution.cpp" && "${dir}/solution_bin" < "${dir}/input.txt"`,
   },
   c: {
     filename: 'solution.c',
-    run: (dir) => `cd "${dir}" && gcc -o solution solution.c && ./solution < input.txt`,
+    run: (dir) =>
+      `/usr/bin/gcc -o "${dir}/solution_bin" "${dir}/solution.c" && "${dir}/solution_bin" < "${dir}/input.txt"`,
   },
 };
 
 function runCommand(cmd, timeoutMs) {
   return new Promise((resolve) => {
-    const proc = exec(
+    exec(
       cmd,
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, shell: '/bin/sh' },
       (error, stdout, stderr) => {
-        const timedOut = error?.killed || error?.signal === 'SIGTERM';
         resolve({
           stdout:   stdout || '',
           stderr:   stderr || '',
           exitCode: error ? (error.code || 1) : 0,
-          timedOut,
+          timedOut: !!(error?.killed || error?.signal === 'SIGTERM'),
         });
       }
     );
@@ -63,11 +69,11 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
   await fs.mkdir(tmpDir, { recursive: true });
 
   try {
-    await fs.writeFile(path.join(tmpDir, config.filename), code);
-    await fs.writeFile(path.join(tmpDir, 'input.txt'), stdin || '');
+    await fs.writeFile(path.join(tmpDir, config.filename), code, 'utf8');
+    await fs.writeFile(path.join(tmpDir, 'input.txt'), stdin || '', 'utf8');
 
     const startTime = Date.now();
-    const result    = await runCommand(config.run(tmpDir), timeLimitMs + 5000);
+    const result    = await runCommand(config.run(tmpDir), timeLimitMs + 8000);
 
     return {
       stdout:          result.stdout,
@@ -91,10 +97,10 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
       const expectedOutput = testCase.expected_output.trim();
 
       let status;
-      if (result.timedOut)                       status = 'time_limit_exceeded';
-      else if (result.exitCode !== 0)            status = 'runtime_error';
-      else if (actualOutput === expectedOutput)  status = 'passed';
-      else                                       status = 'failed';
+      if (result.timedOut)                      status = 'time_limit_exceeded';
+      else if (result.exitCode !== 0)           status = 'runtime_error';
+      else if (actualOutput === expectedOutput) status = 'passed';
+      else                                      status = 'failed';
 
       results.push({
         testCaseId:      testCase.id,
@@ -119,7 +125,6 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
   return results;
 }
 
-// Shims for backwards compatibility with submissions.js
 const executeCodeSimulated  = executeCode;
 const runTestCasesSimulated = runTestCases;
 const isDockerAvailable     = () => Promise.resolve(true);

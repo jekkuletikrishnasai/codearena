@@ -299,9 +299,7 @@ export default function StudentProblem() {
               <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
                 <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">stdout</span>
                 {output && !running && (
-                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-                    output.exitCode === 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                  }`}>
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${output.exitCode === 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
                     {output.exitCode === 0 ? '✓ OK' : '✗ Error'} · {output.executionTimeMs}ms
                   </span>
                 )}
@@ -309,7 +307,7 @@ export default function StudentProblem() {
               <div className="flex-1 p-3 overflow-auto">
                 {running ? (
                   <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <Loader size={12} className="animate-spin" /> Running on Piston...
+                    <Loader size={12} className="animate-spin" /> Running...
                   </div>
                 ) : output ? (
                   <div>
