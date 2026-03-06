@@ -11,7 +11,7 @@ app.use(cors({
     "http://localhost:3000",
     "https://codearena-mu.vercel.app"
   ],
-  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
+  methods: ["GET"],
   allowedHeaders: ["Content-Type","Authorization"],
   credentials: true
 }));
