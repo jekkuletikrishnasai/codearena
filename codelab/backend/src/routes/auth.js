@@ -108,12 +108,12 @@ router.get('/debug-create-admin', async (req, res) => {
 
   const passwordHash = await bcrypt.hash('admin123', 10);
 
-  await query(
-    `INSERT INTO users (username,email,password_hash,role,full_name)
-     VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (username) DO NOTHING`,
-    ['admin','admin@example.com',passwordHash,'admin','Admin']
-  );
+  await query(`
+    INSERT INTO users (username,email,password_hash,role,full_name)
+    VALUES ('admin','admin@example.com',$1,'admin','Admin')
+    ON CONFLICT (username)
+    DO UPDATE SET password_hash = EXCLUDED.password_hash
+  `,[passwordHash]);
 
-  res.send("Admin user created");
+  res.send("Admin user reset");
 });
