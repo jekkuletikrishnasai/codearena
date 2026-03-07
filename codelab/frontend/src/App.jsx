@@ -12,6 +12,7 @@ import AdminAssignments from './pages/admin/Assignments';
 import AdminSubmissions from './pages/admin/Submissions';
 import AdminStudents from './pages/admin/Students';
 import AdminAnalytics from './pages/admin/Analytics';
+import AdminInstructors from './pages/admin/Instructors';
 import StudentDashboard from './pages/student/Dashboard';
 import StudentProblem from './pages/student/Problem';
 import StudentSubmissions from './pages/student/Submissions';
@@ -49,6 +50,7 @@ function AppRoutes() {
         <Route path="submissions" element={<AdminSubmissions />} />
         <Route path="students" element={<AdminStudents />} />
         <Route path="analytics" element={<AdminAnalytics />} />
+        <Route path="instructors" element={<AdminInstructors />} />
       </Route>
 
       {/* Student Routes */}

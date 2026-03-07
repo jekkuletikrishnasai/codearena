@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>CodeLab – The War</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;width:100vw;height:100vh;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#ui{position:fixed;bottom:0;left:0;right:0;pointer-events:none;
+  padding:6px 16px 9px;
+  background:linear-gradient(0deg,rgba(0,0,0,.92) 0%,rgba(0,0,0,.45) 65%,transparent 100%)}
+#quote{font:italic 11px/1.5 Georgia,serif;color:rgba(255,255,255,.88);
+  letter-spacing:.06em;text-align:center;
+  opacity:0;transform:translateY(4px);transition:opacity .5s,transform .5s}
+#quote.on{opacity:1;transform:translateY(0)}
+#hud{position:fixed;top:0;left:0;right:0;pointer-events:none;
+  padding:7px 0 4px;text-align:center;
+  background:linear-gradient(180deg,rgba(0,0,0,.85) 0%,transparent 100%)}
+#hud h1{font:900 13px/1 Georgia,serif;letter-spacing:.45em;color:#fff}
+#hud p{font:italic 8px Georgia,serif;letter-spacing:.3em;color:rgba(255,255,255,.35);margin-top:2px}
+</style>
+</head>
+<body>
+<div id="hud"><h1>CODELAB</h1><p>ONE CODER · INFINITE BATTLES</p></div>
+<canvas id="c"></canvas>
+<div id="ui"><div id="quote"></div></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════════════════════════════════
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W,H,GY,STOP,SLEFT,SRIGHT;
+
+function resize(){
+  W  = cv.clientWidth  = window.innerWidth;
+  H  = cv.clientHeight = window.innerHeight;
+  GY    = H * 0.68;     // ground y
+  STOP  = H * 0.09;     // stage top
+  SLEFT = W * 0.025;
+  SRIGHT= W * 0.975;
+}
+resize();
+window.addEventListener('resize',resize);
+
+// ═══════════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════════════════════
+const SC   = ()=> Math.max(20, H * 0.062); // figure scale (~43px on 700px)
+const QUOTES=[
+  '"Outnumbered. Never outskilled."',
+  '"They send armies. He sends code."',
+  '"Every distraction falls before discipline."',
+  '"One focused mind beats a thousand doubts."',
+  '"He does not retreat. He refactors."',
+  '"The army of procrastination never met a deadline."',
+  '"Block them all. Ship the code."',
+  '"Discipline is the sword. Focus is the shield."',
+  '"They keep coming. So does he."',
+  '"No bug survives. No enemy either."',
+];
+let qIdx=0;
+const qEl=document.getElementById('quote');
+function nextQ(){
+  qEl.classList.remove('on');
+  setTimeout(()=>{qEl.textContent=QUOTES[qIdx++%QUOTES.length];qEl.classList.add('on');},300);
+}
+nextQ(); setInterval(nextQ,4000);
+
+// ═══════════════════════════════════════════════════════════════════
+//  MATH
+// ═══════════════════════════════════════════════════════════════════
+const lerp=(a,b,t)=>a+(b-a)*t;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function easeInOut(t){return t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2}
+function easeOut(t){return 1-(1-t)*(1-t)}
+
+// ═══════════════════════════════════════════════════════════════════
+//  SKELETON RENDERER
+//  Each figure is defined by 2D bone angles from a root.
+//  Joints: head, neck, lShoulder,lElbow,lHand, rShoulder,rElbow,rHand,
+//          hip, lHip,lKnee,lFoot, rHip,rKnee,rFoot
+//  pos = foot-centre on ground
+// ═══════════════════════════════════════════════════════════════════
+function drawFigure(pos, sc, fill, stroke, skel, facing, alpha=1){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = stroke;
+  ctx.fillStyle   = fill;
+  ctx.lineWidth   = Math.max(1.4, sc*0.056);
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  const d  = facing; // +1=right, -1=left
+  const gx = pos.x;
+  const gy = pos.y - (skel.jumpY||0);
+
+  // Bone lengths
+  const bLeg  = sc * 0.27;
+  const bTors = sc * 0.26;
+  const bArm  = sc * 0.22;
+  const bHead = sc * 0.13;
+
+  // --- Build joints bottom-up ---
+  // feet
+  const rfx = gx + (skel.rfx||0)*d*sc;
+  const rfy = gy + (skel.rfy||0)*sc;
+  const lfx = gx + (skel.lfx||0)*d*sc;
+  const lfy = gy + (skel.lfy||0)*sc;
+
+  // knees (mid of hip→foot + bend)
+  const rhipx = gx + (skel.rhipx||0)*d*sc;
+  const rhipy = gy + (skel.rhipy||-.52)*sc;
+  const lhipx = gx + (skel.lhipx||0)*d*sc;
+  const lhipy = gy + (skel.lhipy||-.52)*sc;
+
+  const rkx = lerp(rhipx,rfx,.5)+(skel.rkbx||0)*d*sc;
+  const rky = lerp(rhipy,rfy,.5)+(skel.rkby||0)*sc;
+  const lkx = lerp(lhipx,lfx,.5)+(skel.lkbx||0)*d*sc;
+  const lky = lerp(lhipy,lfy,.5)+(skel.lkby||0)*sc;
+
+  // hip root
+  const hipx = gx + (skel.hipx||0)*d*sc;
+  const hipy = gy + (skel.hipy||-.52)*sc;
+
+  // torso → neck
+  const neckx = hipx + (skel.leanx||0)*d*sc;
+  const necky = hipy - bTors + (skel.leany||0)*sc;
+
+  // head
+  const headx = neckx + (skel.headx||0)*d*sc;
+  const heady = necky - bHead*1.1;
+
+  // shoulders
+  const rshx = neckx + (skel.rshox||.08)*d*sc;
+  const rshy = necky + bHead*.1 + (skel.rshoy||0)*sc;
+  const lshx = neckx + (skel.lshox||-.08)*d*sc;
+  const lshy = rshy + (skel.lshoy||0)*sc;
+
+  // elbows
+  const rex = rshx+(skel.rex||.6)*d*bArm;
+  const rey = rshy+(skel.rey||.5)*bArm;
+  const lex = lshx+(skel.lex||-.4)*d*bArm;
+  const ley = lshy+(skel.ley||.5)*bArm;
+
+  // hands
+  const rhx = rex+(skel.rhx||.5)*d*bArm;
+  const rhy = rey+(skel.rhy||.3)*bArm;
+  const lhx = lex+(skel.lhx||-.4)*d*bArm;
+  const lhy = ley+(skel.lhy||.3)*bArm;
+
+  const line=(ax,ay,bx,by)=>{ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke()};
+
+  // draw back limbs first
+  line(lhipx,lhipy,lkx,lky); line(lkx,lky,lfx,lfy); // back leg
+  line(lshx,lshy,lex,ley);   line(lex,ley,lhx,lhy);  // back arm
+
+  // torso
+  line(neckx,necky,hipx,hipy);
+  // hip cross
+  line(lhipx,lhipy,rhipx,rhipy);
+
+  // front leg
+  line(rhipx,rhipy,rkx,rky); line(rkx,rky,rfx,rfy);
+  // front arm
+  line(rshx,rshy,rex,rey);   line(rex,rey,rhx,rhy);
+
+  // head
+  ctx.beginPath(); ctx.arc(headx,heady,bHead,0,Math.PI*2);
+  ctx.fillStyle=fill; ctx.fill(); ctx.stroke();
+
+  // sword (only if defined)
+  if(skel.sword!=null){
+    const sang = skel.sword * d;
+    const slen = (skel.swordLen||1.7)*sc*0.27;
+    const hilt = {x:rhx,y:rhy};
+    const tip  = {x:rhx+Math.cos(sang)*slen, y:rhy+Math.sin(sang)*slen};
+    // blade
+    ctx.save();
+    ctx.lineWidth = Math.max(1.5,sc*.048);
+    ctx.strokeStyle = stroke;
+    ctx.beginPath(); ctx.moveTo(hilt.x,hilt.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
+    // guard
+    const gp = lerp(0,.2,1);
+    const gx2 = hilt.x+Math.cos(sang)*slen*.15;
+    const gy2 = hilt.y+Math.sin(sang)*slen*.15;
+    const perp = sang+Math.PI/2;
+    const gl   = sc*.09;
+    ctx.lineWidth = Math.max(1.2,sc*.042);
+    ctx.beginPath();
+    ctx.moveTo(gx2+Math.cos(perp)*gl,gy2+Math.sin(perp)*gl);
+    ctx.lineTo(gx2-Math.cos(perp)*gl,gy2-Math.sin(perp)*gl);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  KEYFRAME ANIMATIONS
+//  Each animation = array of {skel, frames} keyframes
+//  Skeleton fields as above
+// ═══════════════════════════════════════════════════════════════════
+
+// ── HERO ANIMATIONS ──────────────────────────────────────────────
+const HERO_ANIMS = {
+
+  idle:[
+    {f:12,s:{leanx:.04, rex:.55,rey:.3,rhx:.5,rhy:.5, lex:-.45,ley:.4,lhx:-.4,lhy:.55,
+      rhipx:.06,rhipy:-.53,rfx:.18,rfy:0, lhipx:-.06,lhipy:-.53,lfx:-.15,lfy:0, sword:.3}},
+    {f:12,s:{leanx:.02, rex:.5,rey:.35,rhx:.48,rhy:.52, lex:-.42,ley:.42,lhx:-.38,lhy:.57,
+      rhipx:.07,rfx:.2,rfy:0, lhipx:-.07,lfx:-.17,lfy:0, sword:.32}},
+  ],
+
+  // overhead slash
+  slash:[
+    {f:6,s:{leanx:-.05,leany:-.05,jumpY:0,
+      rex:-.2,rey:-.9,rhx:.1,rhy:-.8,lex:-.3,ley:-.6,lhx:-.25,lhy:-.4,
+      rhipx:.05,rfx:.25,rfy:0,lhipx:-.08,lfx:-.2,lfy:0,sword:-1.4,swordLen:1.8}},
+    {f:7,s:{leanx:.18,leany:.05,jumpY:8,
+      rex:.7,rey:.1,rhx:.9,rhy:.6,lex:-.2,ley:.2,lhx:-.18,lhy:.45,
+      rkby:-.08,
+      rhipx:.1,rfx:.32,rfy:0,lhipx:-.1,lfx:-.22,lfy:0,sword:.65,swordLen:1.8}},
+    {f:5,s:{leanx:.12,
+      rex:.5,rey:.4,rhx:.55,rhy:.7,lex:-.3,ley:.3,lhx:-.28,lhy:.5,
+      rhipx:.08,rfx:.22,rfy:0,lhipx:-.08,lfx:-.18,lfy:0,sword:.8,swordLen:1.8}},
+  ],
+
+  // spin slash
+  spin:[
+    {f:5,s:{leanx:.25,leany:0,jumpY:5,
+      rex:.2,rey:-.5,rhx:.8,rhy:-.2,lex:-.6,ley:.2,lhx:-.7,lhy:.4,
+      rhipx:.1,rfx:.3,rfy:0,lhipx:-.15,lfx:-.25,lfy:0,sword:-.5,swordLen:1.8}},
+    {f:6,s:{leanx:-.1,jumpY:12,
+      rex:-.5,rey:-.3,rhx:-.3,rhy:.3,lex:.4,ley:-.3,lhx:.5,lhy:.2,
+      rhipx:.08,rfx:.15,rfy:-.1,lhipx:-.12,lfx:-.3,lfy:-.05,sword:-1.8,swordLen:1.8}},
+    {f:6,s:{leanx:.1,jumpY:0,
+      rex:.6,rey:.1,rhx:.7,rhy:.5,lex:-.3,ley:.3,lhx:-.28,lhy:.5,
+      rhipx:.08,rfx:.28,rfy:0,lhipx:-.1,lfx:-.2,lfy:0,sword:.4,swordLen:1.8}},
+  ],
+
+  // flying kick
+  flyKick:[
+    {f:5,s:{jumpY:0,
+      rex:.3,rey:.2,rhx:.5,rhy:.4,lex:-.3,ley:.2,lhx:-.5,lhy:.4,
+      rhipx:.05,rfx:.12,rfy:-.05,lhipx:-.05,lfx:-.1,lfy:-.05}},
+    {f:7,s:{jumpY:35,leanx:.08,
+      rex:.2,rey:-.1,rhx:.4,rhy:-.2,lex:-.2,ley:-.1,lhx:-.4,lhy:-.2,
+      rhipx:.1,rhipy:-.42,rfx:.95,rfy:-.3,rkbx:.3,rkby:-.25,
+      lhipx:-.12,lhipy:-.62,lfx:-.2,lfy:-.15}},
+    {f:5,s:{jumpY:0,leanx:.05,
+      rex:.4,rey:.3,rhx:.5,rhy:.5,lex:-.35,ley:.3,lhx:-.45,lhy:.5,
+      rhipx:.07,rfx:.2,rfy:0,lhipx:-.08,lfx:-.18,lfy:0}},
+  ],
+
+  // roundhouse kick
+  roundHouse:[
+    {f:5,s:{jumpY:8,leanx:-.1,
+      rex:-.2,rey:.2,rhx:-.1,rhy:.5,lex:.3,ley:.1,lhx:.5,lhy:.3,
+      rhipx:.05,rfx:.1,rfy:0,
+      lhipx:.05,lhipy:-.35,lfx:.8,lfy:-.35,lkbx:.25,lkby:-.2}},
+    {f:6,s:{jumpY:15,leanx:-.15,
+      rex:-.1,rey:.1,rhx:.1,rhy:.4,lex:.4,ley:.0,lhx:.6,lhy:.2,
+      rhipx:.04,rfx:.08,rfy:0,
+      lhipx:.0,lhipy:-.3,lfx:1.05,lfy:-.4,lkbx:.35,lkby:-.3}},
+    {f:5,s:{jumpY:0,leanx:.02,
+      rex:.5,rey:.35,rhx:.5,rhy:.55,lex:-.4,ley:.4,lhx:-.4,lhy:.55,
+      rhipx:.07,rfx:.2,rfy:0,lhipx:-.07,lfx:-.18,lfy:0}},
+  ],
+
+  // low sweep
+  sweep:[
+    {f:5,s:{leanx:.3,leany:.12,
+      rex:.5,rey:.7,rhx:.8,rhy:.8,lex:-.4,ley:.5,lhx:-.5,lhy:.7,
+      rhipx:.15,rhipy:-.38,rfx:.4,rfy:.02,rkby:.06,
+      lhipx:-.1,lhipy:-.45,lfx:-.3,lfy:0,sword:.9,swordLen:1.9}},
+    {f:6,s:{leanx:.25,leany:.1,
+      rex:.7,rey:.6,rhx:1.0,rhy:.75,lex:-.3,ley:.4,lhx:-.35,lhy:.6,
+      rhipx:.14,rfx:.38,rfy:.02,
+      lhipx:-.12,lfx:-.28,lfy:0,sword:.85,swordLen:1.9}},
+  ],
+
+  // upward slash
+  upSlash:[
+    {f:5,s:{leanx:-.08,jumpY:5,
+      rex:.2,rey:.6,rhx:.1,rhy:.9,lex:-.3,ley:.4,lhx:-.35,lhy:.55,
+      rhipx:.06,rfx:.15,rfy:0,lhipx:-.09,lfx:-.2,lfy:0,sword:.85,swordLen:1.8}},
+    {f:7,s:{leanx:.05,jumpY:18,
+      rex:.15,rey:-.7,rhx:.2,rhy:-1.0,lex:-.25,ley:-.3,lhx:-.2,lhy:-.1,
+      rhipx:.07,rfx:.25,rfy:-.1,lhipx:-.1,lfx:-.15,lfy:-.08,sword:-1.1,swordLen:1.8}},
+    {f:5,s:{leanx:.04,jumpY:0,
+      rex:.5,rey:.3,rhx:.5,rhy:.5,lex:-.4,ley:.35,lhx:-.38,lhy:.5,
+      rhipx:.06,rfx:.2,rfy:0,lhipx:-.08,lfx:-.18,lfy:0,sword:.3,swordLen:1.8}},
+  ],
+
+  // punch
+  punch:[
+    {f:5,s:{leanx:.15,
+      rex:.9,rey:.0,rhx:1.3,rhy:.05,lex:-.3,ley:.3,lhx:-.25,lhy:.5,
+      rkbx:.05,rhipx:.1,rfx:.3,rfy:0,lhipx:-.08,lfx:-.22,lfy:0}},
+    {f:4,s:{leanx:.18,
+      rex:1.0,rey:.0,rhx:1.45,rhy:.05,lex:-.28,ley:.28,lhx:-.22,lhy:.48,
+      rhipx:.12,rfx:.32,rfy:0,lhipx:-.09,lfx:-.22,lfy:0}},
+    {f:5,s:{leanx:.04,
+      rex:.5,rey:.3,rhx:.5,rhy:.5,lex:-.4,ley:.4,lhx:-.38,lhy:.55,
+      rhipx:.06,rfx:.2,rfy:0,lhipx:-.08,lfx:-.18,lfy:0}},
+  ],
+
+  // block
+  block:[
+    {f:14,s:{leanx:-.06,
+      rex:.35,rey:-.25,rhx:.45,rhy:-.05,lex:.2,ley:-.25,lhx:.35,lhy:-.05,
+      rhipx:.05,rfx:.18,rfy:0,lhipx:-.08,lfx:-.2,lfy:0,sword:-1.05,swordLen:1.5}},
+  ],
+
+  // backflip
+  backflip:[
+    {f:4,s:{jumpY:0,leanx:-.05,
+      rex:.2,rey:.1,rhx:.3,rhy:.4,lex:-.2,ley:.1,lhx:-.3,lhy:.4,
+      rhipx:.05,rfx:.12,rfy:-.05,lhipx:-.05,lfx:-.1,lfy:-.05}},
+    {f:6,s:{jumpY:32,leanx:-.3,
+      rex:-.4,rey:-.4,rhx:-.5,rhy:-.2,lex:.3,ley:-.4,lhx:.4,lhy:-.2,
+      rhipx:.05,rfx:.05,rfy:-.25,lhipx:-.05,lfx:-.05,lfy:-.2}},
+    {f:4,s:{jumpY:0,leanx:.04,
+      rex:.5,rey:.3,rhx:.5,rhy:.5,lex:-.4,ley:.35,lhx:-.38,lhy:.5,
+      rhipx:.06,rfx:.2,rfy:0,lhipx:-.08,lfx:-.18,lfy:0}},
+  ],
+};
+
+// ── ENEMY ANIMATIONS ─────────────────────────────────────────────
+const ENEMY_ANIMS = {
+  walk:[
+    {f:10,s:{leanx:.06,
+      rex:.35,rey:.4,rhx:.3,rhy:.65,lex:-.3,ley:.45,lhx:-.25,lhy:.68,
+      rhipx:.07,rfx:.28,rfy:0,rkby:.04,
+      lhipx:-.07,lfx:-.22,lfy:0,lkby:.04}},
+    {f:10,s:{leanx:.06,
+      rex:.28,rey:.48,rhx:.22,rhy:.72,lex:-.36,ley:.38,lhx:-.3,lhy:.6,
+      rhipx:.05,rfx:.18,rfy:0,
+      lhipx:-.09,lfx:-.32,lfy:0,lkby:.05}},
+  ],
+  run:[
+    {f:7,s:{leanx:.12,
+      rex:.2,rey:.2,rhx:.35,rhy:.5,lex:-.5,ley:.15,lhx:-.6,lhy:.35,
+      rhipx:.1,rfx:.42,rfy:0,rkby:.05,
+      lhipx:-.1,lfx:-.12,lfy:-.08,lkby:-.04}},
+    {f:7,s:{leanx:.12,
+      rex:.45,rey:.15,rhx:.6,rhy:.4,lex:-.25,ley:.22,lhx:-.35,lhy:.5,
+      rhipx:.08,rfx:.15,rfy:-.06,rkby:-.03,
+      lhipx:-.1,lfx:.38,lfy:0,lkby:.04}},
+  ],
+  attack:[
+    {f:6,s:{leanx:.2,
+      rex:.85,rey:-.1,rhx:1.1,rhy:.15,lex:-.2,ley:.3,lhx:-.15,lhy:.52,
+      rhipx:.12,rfx:.35,rfy:0,rkby:.04,
+      lhipx:-.08,lfx:-.2,lfy:0}},
+    {f:5,s:{leanx:.22,
+      rex:.95,rey:-.05,rhx:1.25,rhy:.18,lex:-.18,ley:.28,lhx:-.12,lhy:.5,
+      rhipx:.13,rfx:.38,rfy:0,
+      lhipx:-.09,lfx:-.22,lfy:0}},
+    {f:6,s:{leanx:.06,
+      rex:.3,rey:.4,rhx:.28,rhy:.62,lex:-.28,ley:.42,lhx:-.24,lhy:.64,
+      rhipx:.06,rfx:.2,rfy:0,lhipx:-.07,lfx:-.18,lfy:0}},
+  ],
+  kick:[
+    {f:5,s:{leanx:.08,jumpY:6,
+      rex:.25,rey:.2,rhx:.3,rhy:.45,lex:-.3,ley:.2,lhx:-.35,lhy:.42,
+      rhipx:.06,rfx:.2,rfy:0,
+      lhipx:-.05,lhipy:-.38,lfx:.72,lfy:-.32,lkbx:.2,lkby:-.2}},
+    {f:6,s:{leanx:.06,jumpY:10,
+      rex:.2,rey:.18,rhx:.25,rhy:.42,lex:-.28,ley:.18,lhx:-.32,lhy:.4,
+      rhipx:.04,rfx:.18,rfy:0,
+      lhipx:-.04,lhipy:-.32,lfx:.88,lfy:-.38,lkbx:.28,lkby:-.28}},
+    {f:5,s:{jumpY:0,leanx:.04,
+      rex:.32,rey:.4,rhx:.3,rhy:.62,lex:-.28,ley:.4,lhx:-.24,lhy:.62,
+      rhipx:.06,rfx:.2,rfy:0,lhipx:-.06,lfx:-.18,lfy:0}},
+  ],
+  stagger:[
+    {f:8,s:{leanx:-.28,leany:.05,
+      rex:.5,rey:.65,rhx:.55,rhy:.85,lex:-.4,ley:.6,lhx:-.45,lhy:.8,
+      rhipx:.08,rfx:.22,rfy:.02,
+      lhipx:-.05,lfx:-.15,lfy:.02}},
+    {f:8,s:{leanx:-.32,leany:.06,
+      rex:.55,rey:.68,rhx:.6,rhy:.88,lex:-.42,ley:.62,lhx:-.48,lhy:.82,
+      rhipx:.1,rfx:.25,rfy:.02,
+      lhipx:-.04,lfx:-.12,lfy:.02}},
+  ],
+  fall:[
+    {f:6,s:{leanx:-.5,leany:.08,jumpY:0,
+      rex:.6,rey:.75,rhx:.65,rhy:.9,lex:-.45,ley:.7,lhx:-.5,lhy:.85,
+      rhipx:.12,rfx:.28,rfy:.04,
+      lhipx:-.06,lfx:-.1,lfy:.04}},
+    {f:8,s:{leanx:-.65,leany:.12,
+      rex:.7,rey:.85,rhx:.72,rhy:1.0,lex:-.5,ley:.78,lhx:-.52,lhy:.92,
+      rhipx:.14,rfx:.32,rfy:.06,
+      lhipx:-.05,lfx:-.08,lfy:.06}},
+  ],
+};
+
+// ═══════════════════════════════════════════════════════════════════
+//  SKELETON INTERPOLATION
+// ═══════════════════════════════════════════════════════════════════
+const SKEL_KEYS=['leanx','leany','hipx','hipy','headx','heady',
+  'rshox','rshoy','lshox','lshoy',
+  'rex','rey','rhx','rhy','lex','ley','lhx','lhy',
+  'rhipx','rhipy','rfx','rfy','rkbx','rkby',
+  'lhipx','lhipy','lfx','lfy','lkbx','lkby',
+  'sword','swordLen','jumpY'];
+
+function skelLerp(a,b,t){
+  const r={};
+  SKEL_KEYS.forEach(k=>{
+    const av=a[k]??defaultSkel[k];
+    const bv=b[k]??defaultSkel[k];
+    if(av==null&&bv==null){r[k]=null;return;}
+    r[k]=lerp(av??0, bv??0, t);
+  });
+  return r;
+}
+const defaultSkel={
+  leanx:0,leany:0,hipx:0,hipy:-.52,headx:0,heady:0,
+  rshox:.08,rshoy:0,lshox:-.08,lshoy:0,
+  rex:.5,rey:.4,rhx:.5,rhy:.6,lex:-.4,ley:.4,lhx:-.4,lhy:.6,
+  rhipx:.06,rhipy:-.52,rfx:.18,rfy:0,rkbx:0,rkby:0,
+  lhipx:-.06,lhipy:-.52,lfx:-.15,lfy:0,lkbx:0,lkby:0,
+  sword:null,swordLen:1.7,jumpY:0
+};
+
+// ═══════════════════════════════════════════════════════════════════
+//  ANIMATION PLAYER
+// ═══════════════════════════════════════════════════════════════════
+class AnimPlayer{
+  constructor(anims){
+    this.anims=anims;
+    this.cur='idle'; this.next=null;
+    this.kIdx=0; this.kFrame=0;
+    this.skel={...defaultSkel};
+    this.prevSkel={...defaultSkel};
+    this.nextSkel={...defaultSkel};
+    this._loadAnim('idle');
+  }
+  _loadAnim(name){
+    const a=this.anims[name]||this.anims[Object.keys(this.anims)[0]];
+    this.curAnim=a; this.kIdx=0; this.kFrame=0;
+    this.prevSkel={...this.skel};
+    this.nextSkel={...defaultSkel,...a[0].s};
+  }
+  play(name){
+    if(this.cur===name&&!this.next) return;
+    this.next=name;
+  }
+  playNow(name){
+    this.cur=name;
+    this._loadAnim(name);
+    this.next=null;
+  }
+  update(){
+    const kf=this.curAnim[this.kIdx];
+    this.kFrame++;
+    const t=easeInOut(clamp(this.kFrame/kf.f,0,1));
+    this.skel=skelLerp(this.prevSkel,this.nextSkel,t);
+
+    if(this.kFrame>=kf.f){
+      this.kIdx++;
+      if(this.kIdx>=this.curAnim.length){
+        // animation done
+        if(this.next){
+          this.cur=this.next; this.next=null;
+          this._loadAnim(this.cur);
+        } else if(this.cur!=='idle'&&this.cur!=='walk'&&this.cur!=='run'){
+          // non-looping anim → go back to idle
+          this.cur='idle'; this._loadAnim('idle');
+        } else {
+          this.kIdx=0;
+          this.prevSkel={...this.nextSkel};
+          this.nextSkel={...defaultSkel,...this.curAnim[0].s};
+        }
+      } else {
+        this.prevSkel={...this.nextSkel};
+        this.nextSkel={...defaultSkel,...this.curAnim[this.kIdx].s};
+      }
+      this.kFrame=0;
+    }
+    return this.skel;
+  }
+  isPlaying(name){return this.cur===name;}
+  done(){return this.cur==='idle'&&this.kIdx===0&&this.kFrame<3;}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PARTICLES & EFFECTS
+// ═══════════════════════════════════════════════════════════════════
+const FX=[];
+function spawnFX(x,y,n,col,spd=3.5,sz=2.5){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2;
+    const s=spd*(.3+Math.random()*.9);
+    FX.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1.5,
+      life:1,d:.025+Math.random()*.035,sz:sz*(.5+Math.random()),col});
+  }
+}
+const RINGS=[];
+function spawnRing(x,y,col='rgba(0,0,0,.55)',max=45){
+  RINGS.push({x,y,r:4,max,life:1,col});
+}
+const FLOATERS=[];
+function spawnFloat(x,y,txt){
+  FLOATERS.push({x,y,txt,life:1,vy:-1.0});
+}
+const SMEARS=[];
+function addSmear(x,y){
+  if(SMEARS.length>80) SMEARS.splice(0,5);
+  SMEARS.push({x:x+(Math.random()-.5)*14,y:y+(Math.random()-.5)*5,
+    r:.8+Math.random()*2.2,a:.35+Math.random()*.35});
+}
+
+function drawFX(sc){
+  // smears (blood/dust on stage floor)
+  SMEARS.forEach(s=>{
+    ctx.save();ctx.globalAlpha=s.a*.55;ctx.fillStyle='#1a1a1a';
+    ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();ctx.restore();
+  });
+  // rings
+  for(let i=RINGS.length-1;i>=0;i--){
+    const r=RINGS[i];
+    r.r+=r.max*.065;r.life-=.06;
+    if(r.life<=0){RINGS.splice(i,1);continue;}
+    ctx.save();ctx.strokeStyle=r.col;ctx.lineWidth=1.4;ctx.globalAlpha=r.life*.65;
+    ctx.beginPath();ctx.arc(r.x,r.y,r.r,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
+  // particles
+  for(let i=FX.length-1;i>=0;i--){
+    const p=FX[i];
+    p.x+=p.vx;p.y+=p.vy;p.vy+=.22;p.vx*=.96;p.life-=p.d;
+    if(p.life<=0){FX.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=p.life*.85;ctx.fillStyle=p.col;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.sz*p.life,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+  // floaters
+  for(let i=FLOATERS.length-1;i>=0;i--){
+    const f=FLOATERS[i];
+    f.y+=f.vy;f.life-=.022;
+    if(f.life<=0){FLOATERS.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=f.life;
+    ctx.font=`900 ${sc*.3}px Georgia`;
+    ctx.fillStyle='#111';ctx.textAlign='center';
+    ctx.fillText(f.txt,f.x,f.y);ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  HERO
+// ═══════════════════════════════════════════════════════════════════
+const FLOAT_WORDS=['KIA!','FALL!','DOWN!','STRUCK!','HIT!','BREAK!'];
+class Hero{
+  constructor(){
+    this.x=W*.5; this.anim=new AnimPlayer(HERO_ANIMS);
+    this.dir=1; this.cooldown=0; this.state='idle';
+    this.hitCooldown=0;
+    this.combo=0; this.comboTimer=0;
+  }
+  pickMove(enemies,sc){
+    const range=sc*2.0;
+    const nearR=enemies.filter(e=>!e.dead()&&e.x>this.x).sort((a,b)=>a.x-b.x)[0];
+    const nearL=enemies.filter(e=>!e.dead()&&e.x<this.x).sort((a,b)=>b.x-a.x)[0];
+    const dR=nearR?nearR.x-this.x:9999;
+    const dL=nearL?this.x-nearL.x:9999;
+    const closest=dR<dL?dR:dL;
+
+    // Face the closer threat
+    if(dR<dL) this.dir=1; else if(dL<dR) this.dir=-1;
+
+    if(closest<range){
+      // Aggressive combo
+      this.combo++;
+      const moves=['slash','spin','flyKick','roundHouse','sweep','upSlash','punch','backflip'];
+      const weights=[3,2,2,2,2,2,3,1];
+      let total=weights.reduce((a,b)=>a+b,0);
+      let r=Math.random()*total;
+      for(let i=0;i<moves.length;i++){r-=weights[i];if(r<=0){return moves[i];}}
+      return 'slash';
+    } else {
+      return Math.random()<.3?'slash':'idle';
+    }
+  }
+  update(enemies,sc){
+    this.cooldown=Math.max(0,this.cooldown-1);
+    this.comboTimer=Math.max(0,this.comboTimer-1);
+
+    const skel=this.anim.update();
+
+    // Attack land check
+    if(this.cooldown===0&&!this.anim.isPlaying('idle')&&!this.anim.isPlaying('block')){
+      const hitRange=sc*2.4;
+      enemies.forEach(e=>{
+        if(!e.dead()&&!e.staggered()&&Math.abs(e.x-this.x)<hitRange){
+          const hitChance=.055;
+          if(Math.random()<hitChance){
+            e.getHit(this.x<e.x?1:-1);
+            this.cooldown=12;
+            const mx=(this.x+e.x)*.5;
+            const my=GY-sc*.55;
+            spawnFX(mx,my,10,'#111',3,2.5);
+            spawnRing(mx,my,'rgba(0,0,0,.55)',40);
+            if(Math.random()>.5) spawnFloat(mx,my-sc*.25,FLOAT_WORDS[Math.floor(Math.random()*FLOAT_WORDS.length)]);
+            addSmear(e.x,GY);
+          }
+        }
+      });
+    }
+
+    // Decide next move when idle
+    if(this.anim.isPlaying('idle')){
+      const move=this.pickMove(enemies,sc);
+      if(move!=='idle') this.anim.playNow(move);
+    }
+
+    return skel;
+  }
+  draw(sc){
+    const skel=this.anim.update(); // already called in update, but player is stateless-ish
+    drawFigure({x:this.x,y:GY},sc,'#111','#000',this.anim.skel,this.dir);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ENEMY
+// ═══════════════════════════════════════════════════════════════════
+let eid=0;
+class Enemy{
+  constructor(startX,dir){
+    this.id=eid++;
+    this.x=startX; this.dir=dir; // dir they FACE (toward hero)
+    this.anim=new AnimPlayer(ENEMY_ANIMS);
+    this.hp=2+Math.floor(Math.random()*2);
+    this._state='run'; this.anim.playNow('run');
+    this.staggerTimer=0; this.fallTimer=0;
+    this.alpha=1; this.fadeTimer=0;
+    this.attackCooldown=20+Math.floor(Math.random()*30);
+    this.vx=dir*(1.2+Math.random()*.5); // toward hero = negative x if dir=-1
+  }
+  dead(){return this._state==='gone';}
+  staggered(){return this._state==='stagger'||this._state==='fall';}
+  getHit(knockDir){
+    if(this.staggered()||this.dead()) return;
+    this.hp--;
+    if(this.hp<=0){
+      this._state='fall'; this.fallTimer=0;
+      this.anim.playNow('fall');
+      spawnFX(this.x,GY-16,8,'#222',2.5,2.2);
+    } else {
+      this._state='stagger'; this.staggerTimer=0;
+      this.anim.playNow('stagger');
+      this.x+=knockDir*14;
+    }
+  }
+  update(heroX,sc){
+    const fightDist=sc*1.55;
+    const d=Math.abs(this.x-heroX);
+
+    if(this._state==='run'){
+      this.x-=this.vx;
+      if(Math.abs(this.x-heroX)<fightDist){
+        this._state='fight';
+        this.anim.playNow('walk');
+      }
+    } else if(this._state==='fight'){
+      this.attackCooldown=Math.max(0,this.attackCooldown-1);
+      // Maintain fight distance
+      if(d>fightDist+sc*.2) this.x-=this.vx*.5;
+      else if(d<fightDist*.6) this.x+=this.vx*.4;
+
+      if(this.attackCooldown===0){
+        const atk=Math.random()<.5?'attack':'kick';
+        this.anim.playNow(atk);
+        this.attackCooldown=35+Math.floor(Math.random()*30);
+      } else if(this.anim.isPlaying('idle')){
+        this.anim.playNow('walk');
+      }
+    } else if(this._state==='stagger'){
+      this.staggerTimer++;
+      if(this.staggerTimer>16){this._state='fight';this.anim.playNow('walk');}
+    } else if(this._state==='fall'){
+      this.fallTimer++;
+      if(this.fallTimer>30){
+        this.fadeTimer++;
+        this.alpha=Math.max(0,1-this.fadeTimer/25);
+        if(this.alpha<=0) this._state='gone';
+      }
+    }
+  }
+  draw(sc){
+    if(this.dead()) return;
+    // White fill, dark outline = white soldier
+    drawFigure({x:this.x,y:GY},sc,'#f5f5f5','#2a2a2a',this.anim.skel,this.dir,this.alpha);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  WAVE SPAWNER
+// ═══════════════════════════════════════════════════════════════════
+let enemies=[];
+let waveTimer=0;
+let totalKilled=0;
+const NAMES=['PROCRASTINATION','LAZINESS','SELF-DOUBT','DISTRACTION',
+  'FEAR','COMPARISON','EXCUSES','PERFECTIONISM','SOCIAL MEDIA','IMPOSTER SYNDROME',
+  'BURNOUT','NEGATIVITY','ENVY','QUITTING'];
+
+function spawnWave(heroX,sc){
+  const n=4+Math.floor(Math.random()*5);
+  for(let i=0;i<n;i++){
+    const fromRight=Math.random()>.45;
+    const offX=i*(sc*.7+6);
+    if(fromRight){
+      const ex=SRIGHT+20+offX;
+      enemies.push(new Enemy(ex,-1)); // faces left (toward hero)
+    } else {
+      const ex=SLEFT-20-offX;
+      enemies.push(new Enemy(ex,1));
+    }
+  }
+  // Always add some from opposite side
+  const extra=2+Math.floor(Math.random()*3);
+  for(let i=0;i<extra;i++){
+    const fromRight=Math.random()<.45;
+    const offX=i*(sc*.6+5);
+    if(fromRight){enemies.push(new Enemy(SRIGHT+15+offX,-1));}
+    else{enemies.push(new Enemy(SLEFT-15-offX,1));}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════════════════
+const hero=new Hero();
+let lastTs=0;
+let waveSpawnCool=0;
+
+// Initial wave
+setTimeout(()=>spawnWave(hero.x,SC()),300);
+
+function loop(ts){
+  requestAnimationFrame(loop);
+  lastTs=ts;
+  const sc=SC();
+
+  // ── Clear ──────────────────────────────────────────────────────
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,W,H);
+
+  // ── WHITE STAGE (exact style from reference image) ────────────
+  const sx=SLEFT, sw=SRIGHT-SLEFT, sy=STOP, sh=SH=GY-STOP+6;
+  const sg=ctx.createLinearGradient(sx,sy,sx,sy+sh);
+  sg.addColorStop(0,'#fafafa'); sg.addColorStop(.88,'#efefef'); sg.addColorStop(1,'#d0d0d0');
+  ctx.fillStyle=sg;
+  ctx.fillRect(sx,sy,sw,sh);
+
+  // Top vignette on stage
+  ctx.fillStyle='rgba(0,0,0,.05)';
+  ctx.fillRect(sx,sy,sw,12);
+
+  // Ground line
+  ctx.strokeStyle='rgba(0,0,0,.14)';ctx.lineWidth=1.2;
+  ctx.beginPath();ctx.moveTo(sx,GY);ctx.lineTo(sx+sw,GY);ctx.stroke();
+
+  // ── Shadows under figures ─────────────────────────────────────
+  const shadow=(x)=>{
+    const sg2=ctx.createRadialGradient(x,GY+3,0,x,GY+4,sc*.42);
+    sg2.addColorStop(0,'rgba(0,0,0,.2)');sg2.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sg2;
+    ctx.beginPath();ctx.ellipse(x,GY+4,sc*.4,6,0,0,Math.PI*2);ctx.fill();
+  };
+  enemies.forEach(e=>{if(!e.dead()&&e.alpha>0)shadow(e.x);});
+  shadow(hero.x);
+
+  // ── Effects under figures ─────────────────────────────────────
+  drawFX(sc);
+
+  // ── Update enemies ────────────────────────────────────────────
+  waveTimer++;
+  waveSpawnCool=Math.max(0,waveSpawnCool-1);
+  enemies=enemies.filter(e=>!e.dead());
+  enemies.forEach(e=>e.update(hero.x,sc));
+
+  // Count fallen enemies, spawn new wave when numbers drop
+  const alive=enemies.filter(e=>!e.dead()&&!e.staggered()).length;
+  if(alive<5&&waveSpawnCool===0){
+    spawnWave(hero.x,sc);
+    waveSpawnCool=120;
+    totalKilled+=enemies.filter(e=>e._state==='gone').length;
+  }
+
+  // ── Update hero AI ────────────────────────────────────────────
+  hero.update(enemies,sc);
+
+  // Clamp everyone to stage bounds
+  const pad=sc*.4;
+  hero.x=clamp(hero.x,sx+pad,sx+sw-pad);
+  enemies.forEach(e=>{e.x=clamp(e.x,sx+pad*.3,sx+sw-pad*.3);});
+
+  // ── DRAW: back enemies → hero → front enemies ─────────────────
+  const backE =enemies.filter(e=>e.x<hero.x);
+  const frontE=enemies.filter(e=>e.x>=hero.x);
+
+  backE.forEach(e=>e.draw(sc));
+
+  // Hero (black)
+  drawFigure({x:hero.x,y:GY},sc,'#111','#000',hero.anim.skel,hero.dir);
+
+  frontE.forEach(e=>e.draw(sc));
+
+  // ── Kill counter (subtle) ─────────────────────────────────────
+  const killed=enemies.filter(e=>e._state==='fall'||e._state==='gone').length+totalKilled;
+  ctx.save();
+  ctx.font=`bold ${sc*.27}px Georgia`;
+  ctx.fillStyle='rgba(0,0,0,.28)';
+  ctx.textAlign='right';
+  ctx.fillText(`⚔ ${killed}`,sx+sw-10,sy+20);
+  ctx.restore();
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -77,11 +77,15 @@ function AvengersMark({ size = 56, glow = false }) {
 
 // ── Left panel ───────────────────────────────────────────────────────────────
 function LeftPanel() {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick(n => n + 1), 3000);
-    return () => clearInterval(t);
-  }, []);
+  return (
+    <div className="hidden lg:flex w-1/2 h-screen">
+      <iframe
+        src="/war.html"
+        className="w-full h-full border-0"
+        title="The Coder's War"
+      />
+    </div>
+  );
 
   const quotes = [
     { text: "Part of the journey is the end.", hero: "Tony Stark" },

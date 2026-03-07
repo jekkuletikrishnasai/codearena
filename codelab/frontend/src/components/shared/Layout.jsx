@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   LayoutDashboard, Code2, ClipboardList, Send, Users,
-  BarChart3, LogOut, Menu, X, BookOpen, ChevronRight, Terminal
+  BarChart3, LogOut, Menu, X, BookOpen, ChevronRight, Terminal, Shield
 } from 'lucide-react';
 
 const adminNav = [
@@ -13,6 +13,7 @@ const adminNav = [
   { to: '/admin/submissions', label: 'Submissions', icon: Send },
   { to: '/admin/students', label: 'Students', icon: Users },
   { to: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { to: '/admin/instructors', label: 'Instructors', icon: Shield },
 ];
 
 const studentNav = [

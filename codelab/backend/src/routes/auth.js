@@ -1,33 +1,28 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { query } = require('../db');
-const { authenticate } = require('../middleware/auth');
+const express  = require('express');
+const bcrypt   = require('bcryptjs');
+const jwt      = require('jsonwebtoken');
+const { query }         = require('../db');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// POST /api/auth/login
+// ── POST /api/auth/login ──────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    if (!username || !password) {
+    if (!username || !password)
       return res.status(400).json({ error: 'Username and password required' });
-    }
 
     const result = await query(
-      'SELECT * FROM users WHERE username = $1 OR email = $1',
-      [username]
+      'SELECT * FROM users WHERE username = $1 OR email = $1', [username]
     );
-
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0)
       return res.status(401).json({ error: 'Invalid credentials' });
-    }
 
     const user = result.rows[0];
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) {
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid)
       return res.status(401).json({ error: 'Invalid credentials' });
-    }
 
     const token = jwt.sign(
       { userId: user.id, role: user.role },
@@ -37,13 +32,7 @@ router.post('/login', async (req, res) => {
 
     res.json({
       token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        fullName: user.full_name,
-      },
+      user: { id: user.id, username: user.username, email: user.email, role: user.role, fullName: user.full_name },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -51,27 +40,25 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/register (admin only in production)
+// ── POST /api/auth/register  (students only — public) ─────────────────────
 router.post('/register', async (req, res) => {
   try {
-    const { username, email, password, fullName, role = 'student' } = req.body;
-
-    if (!username || !email || !password || !fullName) {
+    const { username, email, password, fullName } = req.body;
+    if (!username || !email || !password || !fullName)
       return res.status(400).json({ error: 'All fields required' });
-    }
 
     const existing = await query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]
     );
-    if (existing.rows.length > 0) {
+    if (existing.rows.length > 0)
       return res.status(409).json({ error: 'Username or email already exists' });
-    }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await query(
-      'INSERT INTO users (username, email, password_hash, role, full_name) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, email, role, full_name',
-      [username, email, passwordHash, role === 'admin' ? 'student' : role, fullName]
+      `INSERT INTO users (username, email, password_hash, role, full_name)
+       VALUES ($1, $2, $3, 'student', $4)
+       RETURNING id, username, email, role, full_name`,
+      [username, email, passwordHash, fullName]
     );
 
     const user = result.rows[0];
@@ -83,13 +70,7 @@ router.post('/register', async (req, res) => {
 
     res.status(201).json({
       token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        fullName: user.full_name,
-      },
+      user: { id: user.id, username: user.username, email: user.email, role: user.role, fullName: user.full_name },
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -97,23 +78,41 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// GET /api/auth/me
+// ── POST /api/auth/create-admin  (existing admin only) ───────────────────
+// Only a logged-in admin can create another admin/instructor
+router.post('/create-admin', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { username, email, password, fullName } = req.body;
+    if (!username || !email || !password || !fullName)
+      return res.status(400).json({ error: 'All fields required' });
+
+    const existing = await query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]
+    );
+    if (existing.rows.length > 0)
+      return res.status(409).json({ error: 'Username or email already exists' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await query(
+      `INSERT INTO users (username, email, password_hash, role, full_name)
+       VALUES ($1, $2, $3, 'admin', $4)
+       RETURNING id, username, email, role, full_name`,
+      [username, email, passwordHash, fullName]
+    );
+
+    res.status(201).json({
+      message: 'Admin/Instructor created successfully',
+      user: result.rows[0],
+    });
+  } catch (err) {
+    console.error('Create admin error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────
 router.get('/me', authenticate, async (req, res) => {
   res.json({ user: req.user });
 });
 
 module.exports = router;
-router.get('/debug-create-admin', async (req, res) => {
-  const bcrypt = require('bcryptjs');
-
-  const passwordHash = await bcrypt.hash('admin123', 10);
-
-  await query(`
-    INSERT INTO users (username,email,password_hash,role,full_name)
-    VALUES ('admin','admin@example.com',$1,'admin','Admin')
-    ON CONFLICT (username)
-    DO UPDATE SET password_hash = EXCLUDED.password_hash
-  `,[passwordHash]);
-
-  res.send("Admin user reset");
-});
