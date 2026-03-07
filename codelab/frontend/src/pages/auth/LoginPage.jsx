@@ -1,9 +1,103 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { Terminal, Eye, EyeOff, UserPlus, LogIn, CheckCircle, Shield, Code2, BarChart3, Zap } from 'lucide-react';
+
+// ── Golden Sparkle Canvas ─────────────────────────────────────────────────────
+function SparkleCanvas() {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx    = canvas.getContext('2d');
+    let animId;
+
+    const resize = () => {
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Particles
+    const particles = Array.from({ length: 70 }, () => ({
+      x:    Math.random() * canvas.width,
+      y:    Math.random() * canvas.height,
+      vx:   (Math.random() - 0.5) * 0.35,
+      vy:   (Math.random() - 0.5) * 0.35,
+      r:    Math.random() * 1.4 + 0.3,
+      a:    Math.random() * 0.7 + 0.2,
+      pulse: Math.random() * Math.PI * 2,
+    }));
+
+    let frame = 0;
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      frame++;
+
+      particles.forEach(p => {
+        // Move
+        p.x += p.vx; p.y += p.vy;
+        p.pulse += 0.025;
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width)  p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+
+        const alpha = p.a * (0.5 + 0.5 * Math.sin(p.pulse));
+
+        // Glow
+        const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+        grd.addColorStop(0, `rgba(212,170,0,${alpha * 0.5})`);
+        grd.addColorStop(1, 'rgba(212,170,0,0)');
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        // Core dot
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(212,170,0,${alpha})`;
+        ctx.fill();
+      });
+
+      // Draw connecting lines between nearby particles
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx   = particles[i].x - particles[j].x;
+          const dy   = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 90) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(212,170,0,${(1 - dist / 90) * 0.12})`;
+            ctx.lineWidth   = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+
+      animId = requestAnimationFrame(draw);
+    };
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full"
+      style={{ pointerEvents: 'none' }}
+    />
+  );
+}
 
 // ── Left Panel ────────────────────────────────────────────────────────────────
 function LeftPanel() {
@@ -11,6 +105,7 @@ function LeftPanel() {
     <div className="hidden lg:flex w-1/2 flex-col items-center justify-center relative overflow-hidden"
       style={{ background: 'linear-gradient(145deg, #0a0800 0%, #110e00 40%, #0d0a00 70%, #080600 100%)' }}>
 
+      <SparkleCanvas />
       {/* Grid pattern */}
       <div className="absolute inset-0 opacity-[0.04]" style={{
         backgroundImage: `linear-gradient(rgba(212,170,0,1) 1px, transparent 1px),
@@ -412,9 +507,10 @@ export default function LoginPage() {
       <LeftPanel />
 
       {/* Right panel */}
-      <div className="flex-1 flex items-center justify-center p-8"
+      <div className="flex-1 flex items-center justify-center p-8 relative"
         style={{ background: 'linear-gradient(145deg, #080600 0%, #0d0a00 100%)' }}>
-        <div className="w-full max-w-md">
+        <SparkleCanvas />
+        <div className="w-full max-w-md relative z-10">
           <MobileLogo />
 
           {/* Card */}
