@@ -38,8 +38,8 @@ let W,H,GY,STOP,SLEFT,SRIGHT;
 function resize(){
   W  = cv.clientWidth  = window.innerWidth;
   H  = cv.clientHeight = window.innerHeight;
-  GY    = H * 0.68;     // ground y
-  STOP  = H * 0.09;     // stage top
+  GY    = H * 0.78;     // ground y
+  STOP  = H * 0.14;     // stage top
   SLEFT = W * 0.025;
   SRIGHT= W * 0.975;
 }
@@ -49,7 +49,7 @@ window.addEventListener('resize',resize);
 // ═══════════════════════════════════════════════════════════════════
 //  CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const SC   = ()=> Math.max(20, H * 0.062); // figure scale (~43px on 700px)
+const SC   = ()=> Math.max(22, H * 0.075); // figure scale (~43px on 700px)
 const QUOTES=[
   '"Outnumbered. Never outskilled."',
   '"They send armies. He sends code."',

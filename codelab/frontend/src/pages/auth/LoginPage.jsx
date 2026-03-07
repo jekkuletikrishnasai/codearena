@@ -78,87 +78,12 @@ function AvengersMark({ size = 56, glow = false }) {
 // ── Left panel ───────────────────────────────────────────────────────────────
 function LeftPanel() {
   return (
-    <div className="hidden lg:flex w-1/2 h-screen">
+    <div className="hidden lg:flex w-1/2" style={{ height: '100vh', overflow: 'hidden', background: '#000' }}>
       <iframe
         src="/war.html"
-        className="w-full h-full border-0"
+        style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         title="The Coder's War"
       />
-    </div>
-  );
-
-  const quotes = [
-    { text: "Part of the journey is the end.", hero: "Tony Stark" },
-    { text: "Whatever it takes.", hero: "The Avengers" },
-    { text: "I can do this all day.", hero: "Steve Rogers" },
-    { text: "We're in the endgame now.", hero: "Doctor Strange" },
-  ];
-  const q = quotes[tick % quotes.length];
-
-  return (
-    <div className="hidden lg:flex w-1/2 flex-col items-center justify-center relative overflow-hidden"
-      style={{ background: 'linear-gradient(135deg, #0a0a0f 0%, #0f0f1a 50%, #0a0a0f 100%)' }}>
-      <ParticleCanvas />
-
-      {/* Hex grid overlay */}
-      <div className="absolute inset-0 opacity-5" style={{
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpolygon points='30,2 58,17 58,35 30,50 2,35 2,17' fill='none' stroke='%23DCB43C' stroke-width='1'/%3E%3C/svg%3E")`,
-        backgroundSize: '60px 52px',
-      }} />
-
-      {/* Red energy top-right */}
-      <div className="absolute top-0 right-0 w-72 h-72 rounded-full opacity-10"
-        style={{ background: 'radial-gradient(circle, #8B0000 0%, transparent 70%)', transform: 'translate(30%, -30%)' }} />
-      {/* Gold energy bottom-left */}
-      <div className="absolute bottom-0 left-0 w-96 h-96 rounded-full opacity-8"
-        style={{ background: 'radial-gradient(circle, #DCB43C 0%, transparent 70%)', transform: 'translate(-40%, 40%)' }} />
-
-      <div className="relative z-10 text-center px-12">
-        {/* Logo with pulse ring */}
-        <div className="relative flex items-center justify-center mb-8">
-          <div className="absolute w-28 h-28 rounded-full animate-ping opacity-10"
-            style={{ background: 'radial-gradient(circle, #DCB43C, transparent)', animationDuration: '2.5s' }} />
-          <div className="absolute w-20 h-20 rounded-full opacity-20"
-            style={{ background: 'radial-gradient(circle, #DCB43C, transparent)' }} />
-          <AvengersMark size={72} glow />
-        </div>
-
-        <h1 className="text-5xl font-black mb-2 tracking-widest"
-          style={{ fontFamily: 'Georgia, serif', color: '#DCB43C', textShadow: '0 0 30px rgba(220,180,60,0.4)' }}>
-          CODELAB
-        </h1>
-        <div className="w-24 h-0.5 mx-auto mb-4" style={{ background: 'linear-gradient(90deg, transparent, #DCB43C, transparent)' }} />
-        <p className="text-sm tracking-[0.3em] mb-10" style={{ color: '#8B7A3A' }}>
-          PROGRAMMING ASSESSMENT PLATFORM
-        </p>
-
-        {/* Features */}
-        <div className="space-y-3 mb-10">
-          {[
-            ['⚡', 'Real-time code execution'],
-            ['🛡', 'Automated test evaluation'],
-            ['📊', 'Detailed analytics & reports'],
-            ['🔥', 'Multi-language support'],
-          ].map(([icon, text]) => (
-            <div key={text} className="flex items-center gap-3 text-sm"
-              style={{ color: 'rgba(220,180,60,0.7)' }}>
-              <span className="text-base">{icon}</span>
-              <span style={{ letterSpacing: '0.05em' }}>{text}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Rotating quote */}
-        <div className="border rounded-lg p-4 text-left"
-          style={{ borderColor: 'rgba(220,180,60,0.2)', background: 'rgba(220,180,60,0.04)' }}>
-          <p className="text-sm italic mb-1" style={{ color: 'rgba(220,180,60,0.8)' }}>
-            "{q.text}"
-          </p>
-          <p className="text-xs tracking-widest" style={{ color: 'rgba(220,180,60,0.4)' }}>
-            — {q.hero}
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
