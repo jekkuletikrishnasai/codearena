@@ -99,6 +99,51 @@ function SparkleCanvas() {
   );
 }
 
+// ── Rotating Quotes ───────────────────────────────────────────────────────────
+const AVENGER_QUOTES = [
+  { text: "Whatever it takes.", author: "— Avengers" },
+  { text: "I can do this all day.", author: "— Steve Rogers" },
+  { text: "Part of the journey is the end.", author: "— Tony Stark" },
+  { text: "The price of freedom is high. It always has been.", author: "— Steve Rogers" },
+  { text: "I am Iron Man.", author: "— Tony Stark" },
+  { text: "Genius, billionaire, playboy, philanthropist.", author: "— Tony Stark" },
+  { text: "No mistakes. No do-overs.", author: "— Natasha Romanoff" },
+  { text: "To the end of the line.", author: "— Steve Rogers" },
+];
+
+function RotatingQuote() {
+  const [idx, setIdx]       = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => {
+        setIdx(i => (i + 1) % AVENGER_QUOTES.length);
+        setVisible(true);
+      }, 500);
+    }, 3500);
+    return () => clearInterval(interval);
+  }, []);
+
+  const q = AVENGER_QUOTES[idx];
+  return (
+    <div className="text-center px-6" style={{
+      opacity: visible ? 1 : 0,
+      transform: visible ? 'translateY(0)' : 'translateY(8px)',
+      transition: 'opacity 0.5s ease, transform 0.5s ease',
+      minHeight: '52px',
+    }}>
+      <p className="text-sm italic mb-1" style={{ color: 'rgba(212,170,0,0.75)', fontFamily: 'Georgia, serif' }}>
+        "{q.text}"
+      </p>
+      <p className="text-xs tracking-widest" style={{ color: 'rgba(212,170,0,0.35)' }}>
+        {q.author}
+      </p>
+    </div>
+  );
+}
+
 // ── Left Panel ────────────────────────────────────────────────────────────────
 function LeftPanel() {
   return (
@@ -166,7 +211,7 @@ function LeftPanel() {
         </div>
 
         {/* Code snippet */}
-        <div className="w-full max-w-xs rounded-xl p-4 text-left font-mono text-xs"
+        <div className="w-full max-w-xs rounded-xl p-4 text-left font-mono text-xs mb-8"
           style={{ background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(212,170,0,0.12)' }}>
           <div className="flex gap-1.5 mb-3">
             {['#ff5f57', '#febc2e', '#28c840'].map(c => (
@@ -182,6 +227,19 @@ function LeftPanel() {
             <span style={{ color: '#a78bfa' }}>return </span>
             n * (n + <span style={{ color: '#fb923c' }}>1</span>) // <span style={{ color: '#fb923c' }}>2</span>
           </div>
+        </div>
+
+        {/* Rotating quote */}
+        <RotatingQuote />
+
+        {/* WHATEVER IT TAKES */}
+        <div className="mt-6">
+          <div className="w-24 h-px mx-auto mb-3"
+            style={{ background: 'linear-gradient(90deg, transparent, rgba(212,170,0,0.4), transparent)' }} />
+          <p className="text-xs tracking-[0.4em] text-center font-black"
+            style={{ color: 'rgba(212,170,0,0.25)', fontFamily: 'Georgia, serif' }}>
+            WHATEVER IT TAKES
+          </p>
         </div>
       </div>
     </div>
@@ -311,7 +369,7 @@ function LoginForm({ onSwitch }) {
       <div className="mb-7">
         <h2 className="text-2xl font-black tracking-wide mb-1"
           style={{ color: '#D4AA00', fontFamily: 'Georgia, serif' }}>
-          Welcome back
+          WELCOME BACK
         </h2>
         <p className="text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>
           Sign in to your CodeLab account
@@ -330,14 +388,14 @@ function LoginForm({ onSwitch }) {
               {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           } />
-        <GoldButton loading={loading} label="Sign In" loadingLabel="Signing in…" icon={LogIn} />
+        <GoldButton loading={loading} label="ASSEMBLE" loadingLabel="Assembling…" icon={LogIn} />
       </form>
 
       <p className="mt-6 text-center text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>
-        New student?{' '}
+        New recruit?{' '}
         <button onClick={onSwitch} className="font-semibold hover:opacity-80 transition-opacity"
           style={{ color: '#D4AA00' }}>
-          Create an account
+          Join the team
         </button>
       </p>
     </>
@@ -399,7 +457,7 @@ function RegisterForm({ onSwitch }) {
       </div>
       <h3 className="text-xl font-black tracking-wide mb-2"
         style={{ color: '#D4AA00', fontFamily: 'Georgia, serif' }}>
-        Account Created!
+        ENLISTED!
       </h3>
       <p className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>
         Redirecting to your dashboard…
@@ -415,10 +473,10 @@ function RegisterForm({ onSwitch }) {
       <div className="mb-6">
         <h2 className="text-2xl font-black tracking-wide mb-1"
           style={{ color: '#D4AA00', fontFamily: 'Georgia, serif' }}>
-          Create account
+          JOIN THE TEAM
         </h2>
         <p className="text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>
-          Join CodeLab as a student
+          Enlist as a new recruit
         </p>
       </div>
 
@@ -482,14 +540,14 @@ function RegisterForm({ onSwitch }) {
           {match    && <p className="text-xs text-green-400 mt-1">Passwords match ✓</p>}
         </div>
 
-        <GoldButton loading={loading} label="Create Account" loadingLabel="Creating…" icon={UserPlus} />
+        <GoldButton loading={loading} label="ENLIST NOW" loadingLabel="Enlisting…" icon={UserPlus} />
       </form>
 
       <p className="mt-5 text-center text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>
-        Already have an account?{' '}
+        Already a member?{' '}
         <button onClick={onSwitch} className="font-semibold hover:opacity-80 transition-opacity"
           style={{ color: '#D4AA00' }}>
-          Sign in
+          Assemble
         </button>
       </p>
     </>
@@ -522,7 +580,7 @@ export default function LoginPage() {
             {/* Tab switcher */}
             <div className="flex rounded-xl p-1 mb-7 gap-1"
               style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(212,170,0,0.08)' }}>
-              {[['login', 'Sign In', LogIn], ['register', 'Sign Up', UserPlus]].map(([key, label, Icon]) => (
+              {[['login', 'ASSEMBLE', LogIn], ['register', 'ENLIST', UserPlus]].map(([key, label, Icon]) => (
                 <button key={key} onClick={() => setTab(key)}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-black tracking-widest transition-all duration-200"
                   style={tab === key
