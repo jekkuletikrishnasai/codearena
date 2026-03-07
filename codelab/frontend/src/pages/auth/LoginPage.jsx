@@ -1,69 +1,183 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
-import { Terminal, Eye, EyeOff, UserPlus, LogIn, CheckCircle } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, LogIn, CheckCircle, Shield } from 'lucide-react';
 
-// ── Shared left panel ────────────────────────────────────────────────────────
-function LeftPanel() {
+// ── Particle canvas background ───────────────────────────────────────────────
+function ParticleCanvas() {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    let animId;
+    const resize = () => { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const particles = Array.from({ length: 80 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+      r: Math.random() * 1.5 + 0.3,
+      a: Math.random(),
+    }));
+
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach(p => {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = canvas.width;
+        if (p.x > canvas.width) p.x = 0;
+        if (p.y < 0) p.y = canvas.height;
+        if (p.y > canvas.height) p.y = 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(220,180,60,${p.a * 0.6})`;
+        ctx.fill();
+      });
+      // draw lines between close particles
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 100) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(220,180,60,${(1 - dist / 100) * 0.15})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+      animId = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => { cancelAnimationFrame(animId); window.removeEventListener('resize', resize); };
+  }, []);
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
+}
+
+// ── Avengers A logo SVG ──────────────────────────────────────────────────────
+function AvengersMark({ size = 56, glow = false }) {
   return (
-    <div className="hidden lg:flex w-1/2 bg-gray-900 border-r border-gray-800 flex-col items-center justify-center p-12 relative overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-violet-500/5" />
-      <div className="relative z-10 text-center">
-        <div className="w-20 h-20 bg-sky-500 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-sky-500/20">
-          <Terminal size={40} className="text-white" />
+    <svg width={size} height={size} viewBox="0 0 56 56" fill="none"
+      style={glow ? { filter: 'drop-shadow(0 0 18px #DCB43C) drop-shadow(0 0 6px #DCB43C)' } : {}}>
+      <polygon points="28,4 52,48 4,48" stroke="#DCB43C" strokeWidth="3" fill="none" />
+      <polygon points="28,14 46,44 10,44" stroke="#DCB43C" strokeWidth="1" fill="rgba(220,180,60,0.04)" />
+      <line x1="28" y1="4" x2="28" y2="56" stroke="#DCB43C" strokeWidth="2.5" />
+      <line x1="4" y1="48" x2="52" y2="48" stroke="#DCB43C" strokeWidth="2" />
+    </svg>
+  );
+}
+
+// ── Left panel ───────────────────────────────────────────────────────────────
+function LeftPanel() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  const quotes = [
+    { text: "Part of the journey is the end.", hero: "Tony Stark" },
+    { text: "Whatever it takes.", hero: "The Avengers" },
+    { text: "I can do this all day.", hero: "Steve Rogers" },
+    { text: "We're in the endgame now.", hero: "Doctor Strange" },
+  ];
+  const q = quotes[tick % quotes.length];
+
+  return (
+    <div className="hidden lg:flex w-1/2 flex-col items-center justify-center relative overflow-hidden"
+      style={{ background: 'linear-gradient(135deg, #0a0a0f 0%, #0f0f1a 50%, #0a0a0f 100%)' }}>
+      <ParticleCanvas />
+
+      {/* Hex grid overlay */}
+      <div className="absolute inset-0 opacity-5" style={{
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpolygon points='30,2 58,17 58,35 30,50 2,35 2,17' fill='none' stroke='%23DCB43C' stroke-width='1'/%3E%3C/svg%3E")`,
+        backgroundSize: '60px 52px',
+      }} />
+
+      {/* Red energy top-right */}
+      <div className="absolute top-0 right-0 w-72 h-72 rounded-full opacity-10"
+        style={{ background: 'radial-gradient(circle, #8B0000 0%, transparent 70%)', transform: 'translate(30%, -30%)' }} />
+      {/* Gold energy bottom-left */}
+      <div className="absolute bottom-0 left-0 w-96 h-96 rounded-full opacity-8"
+        style={{ background: 'radial-gradient(circle, #DCB43C 0%, transparent 70%)', transform: 'translate(-40%, 40%)' }} />
+
+      <div className="relative z-10 text-center px-12">
+        {/* Logo with pulse ring */}
+        <div className="relative flex items-center justify-center mb-8">
+          <div className="absolute w-28 h-28 rounded-full animate-ping opacity-10"
+            style={{ background: 'radial-gradient(circle, #DCB43C, transparent)', animationDuration: '2.5s' }} />
+          <div className="absolute w-20 h-20 rounded-full opacity-20"
+            style={{ background: 'radial-gradient(circle, #DCB43C, transparent)' }} />
+          <AvengersMark size={72} glow />
         </div>
-        <h1 className="text-4xl font-bold text-white font-mono mb-3">CodeLab</h1>
-        <p className="text-gray-400 text-lg mb-8">Programming Assessment Platform</p>
-        <div className="space-y-3 text-left max-w-xs">
+
+        <h1 className="text-5xl font-black mb-2 tracking-widest"
+          style={{ fontFamily: 'Georgia, serif', color: '#DCB43C', textShadow: '0 0 30px rgba(220,180,60,0.4)' }}>
+          CODELAB
+        </h1>
+        <div className="w-24 h-0.5 mx-auto mb-4" style={{ background: 'linear-gradient(90deg, transparent, #DCB43C, transparent)' }} />
+        <p className="text-sm tracking-[0.3em] mb-10" style={{ color: '#8B7A3A' }}>
+          PROGRAMMING ASSESSMENT PLATFORM
+        </p>
+
+        {/* Features */}
+        <div className="space-y-3 mb-10">
           {[
-            'Real-time code execution',
-            'Automated test case evaluation',
-            'Detailed analytics & reports',
-            'Multi-language support',
-          ].map(f => (
-            <div key={f} className="flex items-center gap-3 text-sm text-gray-400">
-              <div className="w-1.5 h-1.5 bg-sky-400 rounded-full" />
-              {f}
+            ['⚡', 'Real-time code execution'],
+            ['🛡', 'Automated test evaluation'],
+            ['📊', 'Detailed analytics & reports'],
+            ['🔥', 'Multi-language support'],
+          ].map(([icon, text]) => (
+            <div key={text} className="flex items-center gap-3 text-sm"
+              style={{ color: 'rgba(220,180,60,0.7)' }}>
+              <span className="text-base">{icon}</span>
+              <span style={{ letterSpacing: '0.05em' }}>{text}</span>
             </div>
           ))}
         </div>
-      </div>
-      <div className="absolute bottom-8 left-8 right-8 bg-gray-800/50 rounded-xl p-4 font-mono text-xs text-gray-500 border border-gray-700/50">
-        <div><span className="text-violet-400">def</span> <span className="text-sky-400">solve</span>(n):</div>
-        <div className="pl-4"><span className="text-gray-500"># Write your solution here</span></div>
-        <div className="pl-4"><span className="text-violet-400">return</span> n * (n + <span className="text-orange-400">1</span>) // <span className="text-orange-400">2</span></div>
+
+        {/* Rotating quote */}
+        <div className="border rounded-lg p-4 text-left"
+          style={{ borderColor: 'rgba(220,180,60,0.2)', background: 'rgba(220,180,60,0.04)' }}>
+          <p className="text-sm italic mb-1" style={{ color: 'rgba(220,180,60,0.8)' }}>
+            "{q.text}"
+          </p>
+          <p className="text-xs tracking-widest" style={{ color: 'rgba(220,180,60,0.4)' }}>
+            — {q.hero}
+          </p>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Mobile logo ──────────────────────────────────────────────────────────────
-function MobileLogo() {
-  return (
-    <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-      <div className="w-10 h-10 bg-sky-500 rounded-xl flex items-center justify-center">
-        <Terminal size={20} className="text-white" />
-      </div>
-      <span className="text-xl font-bold text-white font-mono">CodeLab</span>
-    </div>
-  );
-}
-
-// ── Reusable input ───────────────────────────────────────────────────────────
+// ── Shared field ─────────────────────────────────────────────────────────────
 function Field({ label, type = 'text', value, onChange, placeholder, suffix }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-400 mb-1.5">{label}</label>
+      <label className="block text-xs font-semibold mb-1.5 tracking-widest"
+        style={{ color: 'rgba(220,180,60,0.6)' }}>{label}</label>
       <div className="relative">
         <input
-          type={type}
-          value={value}
-          onChange={onChange}
-          placeholder={placeholder}
-          required
-          className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-colors font-mono pr-12"
+          type={type} value={value} onChange={onChange}
+          placeholder={placeholder} required
+          className="w-full rounded-lg px-4 py-3 text-sm pr-12 focus:outline-none transition-all duration-200"
+          style={{
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(220,180,60,0.2)',
+            color: '#e5e5e5',
+            fontFamily: 'monospace',
+          }}
+          onFocus={e => e.target.style.borderColor = 'rgba(220,180,60,0.7)'}
+          onBlur={e => e.target.style.borderColor = 'rgba(220,180,60,0.2)'}
         />
         {suffix && <div className="absolute right-4 top-1/2 -translate-y-1/2">{suffix}</div>}
       </div>
@@ -71,36 +185,47 @@ function Field({ label, type = 'text', value, onChange, placeholder, suffix }) {
   );
 }
 
-// ── Password strength bar ────────────────────────────────────────────────────
+// ── Password strength ────────────────────────────────────────────────────────
 function PasswordStrength({ password }) {
   if (!password) return null;
   const score = [password.length >= 8, /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length;
   const labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
-  const colors = ['', 'bg-red-500', 'bg-orange-400', 'bg-yellow-400', 'bg-emerald-500'];
-  const textColors = ['', 'text-red-400', 'text-orange-400', 'text-yellow-400', 'text-emerald-400'];
+  const colors = ['', '#ef4444', '#f97316', '#eab308', '#22c55e'];
   return (
     <div className="mt-2">
       <div className="flex gap-1 mb-1">
-        {[1, 2, 3, 4].map(i => (
-          <div key={i} className={`h-1 flex-1 rounded-full transition-all duration-300 ${i <= score ? colors[score] : 'bg-gray-700'}`} />
+        {[1,2,3,4].map(i => (
+          <div key={i} className="h-0.5 flex-1 rounded-full transition-all duration-300"
+            style={{ background: i <= score ? colors[score] : 'rgba(255,255,255,0.1)' }} />
         ))}
       </div>
-      <p className={`text-xs ${textColors[score]}`}>{labels[score]}</p>
+      <p className="text-xs" style={{ color: colors[score] }}>{labels[score]}</p>
     </div>
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// LOGIN
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Avengers-style submit button ─────────────────────────────────────────────
+function HeroButton({ loading, label, loadingLabel, icon: Icon }) {
+  return (
+    <button type="submit" disabled={loading}
+      className="w-full py-3 rounded-lg font-bold text-sm tracking-widest flex items-center justify-center gap-2 transition-all duration-300 disabled:opacity-50 relative overflow-hidden group"
+      style={{ background: 'linear-gradient(135deg, #DCB43C, #B8860B)', color: '#0a0a0f' }}>
+      <span className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
+        style={{ background: 'linear-gradient(135deg, #fff, transparent)' }} />
+      <Icon size={16} />
+      {loading ? loadingLabel : label}
+    </button>
+  );
+}
+
+// ══ LOGIN ════════════════════════════════════════════════════════════════════
 function LoginForm({ onSwitch }) {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: '', password: '' });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -111,77 +236,41 @@ function LoginForm({ onSwitch }) {
       navigate(user.role === 'admin' ? '/admin' : '/student');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Invalid credentials');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
     <>
-      <h2 className="text-2xl font-bold text-white mb-1">Welcome back</h2>
-      <p className="text-gray-400 mb-8">Sign in to your CodeLab account</p>
-
-      <form onSubmit={handleSubmit} className="space-y-5">
-        <Field
-          label="Username or Email"
-          value={form.username}
-          onChange={set('username')}
-          placeholder="username or email"
-        />
-        <Field
-          label="Password"
-          type={showPass ? 'text' : 'password'}
-          value={form.password}
-          onChange={set('password')}
-          placeholder="••••••••"
-          suffix={
-            <button type="button" onClick={() => setShowPass(p => !p)} className="text-gray-500 hover:text-gray-300 transition-colors">
-              {showPass ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          }
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-        >
-          <LogIn size={17} />
-          {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
-
-      {/* Demo accounts */}
-      <div className="mt-6 p-4 bg-gray-900 rounded-xl border border-gray-800">
-        <p className="text-xs text-gray-500 mb-3 font-mono uppercase tracking-wider">Demo Accounts</p>
-        <div className="space-y-2">
-          <button
-            onClick={() => setForm({ username: 'admin', password: 'admin123' })}
-            className="w-full text-left text-xs bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 px-3 py-2 rounded-lg transition-colors font-mono"
-          >
-            👨‍🏫 Instructor — admin / admin123
-          </button>
-          <button
-            onClick={() => setForm({ username: 'alice', password: 'student123' })}
-            className="w-full text-left text-xs bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 px-3 py-2 rounded-lg transition-colors font-mono"
-          >
-            👩‍💻 Student — alice / student123
-          </button>
-        </div>
+      <div className="mb-8">
+        <h2 className="text-2xl font-black tracking-wider mb-1" style={{ color: '#DCB43C', fontFamily: 'Georgia, serif' }}>
+          WELCOME BACK
+        </h2>
+        <p className="text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>Sign in to your CodeLab account</p>
       </div>
-
-      <p className="mt-6 text-center text-sm text-gray-500">
-        New student?{' '}
-        <button onClick={onSwitch} className="text-sky-400 hover:text-sky-300 font-medium transition-colors">
-          Create an account
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <Field label="USERNAME OR EMAIL" value={form.username} onChange={set('username')} placeholder="enter username or email" />
+        <Field label="PASSWORD" type={showPass ? 'text' : 'password'} value={form.password} onChange={set('password')} placeholder="••••••••"
+          suffix={
+            <button type="button" onClick={() => setShowPass(p => !p)}
+              style={{ color: 'rgba(220,180,60,0.5)' }}
+              className="hover:opacity-100 transition-opacity">
+              {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          } />
+        <HeroButton loading={loading} label="ASSEMBLE" loadingLabel="ASSEMBLING…" icon={LogIn} />
+      </form>
+      <p className="mt-6 text-center text-xs" style={{ color: 'rgba(255,255,255,0.3)' }}>
+        New recruit?{' '}
+        <button onClick={onSwitch} className="font-semibold transition-colors"
+          style={{ color: '#DCB43C' }}>
+          Join the team
         </button>
       </p>
     </>
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// REGISTER
-// ══════════════════════════════════════════════════════════════════════════════
+// ══ REGISTER ════════════════════════════════════════════════════════════════
 function RegisterForm({ onSwitch }) {
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -190,14 +279,13 @@ function RegisterForm({ onSwitch }) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
-
-  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
   const validate = () => {
     if (!form.fullName.trim()) return 'Full name is required';
     if (form.username.length < 3) return 'Username must be at least 3 characters';
-    if (!/^[a-zA-Z0-9_]+$/.test(form.username)) return 'Username can only contain letters, numbers, and underscores';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return 'Enter a valid email address';
+    if (!/^[a-zA-Z0-9_]+$/.test(form.username)) return 'Username: letters, numbers, underscores only';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return 'Enter a valid email';
     if (form.password.length < 6) return 'Password must be at least 6 characters';
     if (form.password !== form.confirmPassword) return 'Passwords do not match';
     return null;
@@ -207,7 +295,6 @@ function RegisterForm({ onSwitch }) {
     e.preventDefault();
     const err = validate();
     if (err) return toast.error(err);
-
     setLoading(true);
     try {
       await api.post('/api/auth/register', {
@@ -219,174 +306,143 @@ function RegisterForm({ onSwitch }) {
       });
       setDone(true);
       toast.success('Account created! Signing you in…');
-      // auto-login
       await login(form.username, form.password);
       navigate('/student');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Registration failed');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  if (done) {
-    return (
-      <div className="text-center py-8">
-        <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-          <CheckCircle size={32} className="text-emerald-400" />
-        </div>
-        <h3 className="text-xl font-bold text-white mb-2">Account Created!</h3>
-        <p className="text-gray-400 text-sm">Redirecting you to your dashboard…</p>
+  if (done) return (
+    <div className="text-center py-12">
+      <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+        style={{ background: 'rgba(220,180,60,0.1)', border: '1px solid rgba(220,180,60,0.3)' }}>
+        <CheckCircle size={32} style={{ color: '#DCB43C' }} />
       </div>
-    );
-  }
+      <h3 className="text-xl font-black tracking-wider mb-2" style={{ color: '#DCB43C' }}>HERO REGISTERED!</h3>
+      <p className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>Redirecting to your dashboard…</p>
+    </div>
+  );
 
-  const passwordsMatch = form.confirmPassword && form.password === form.confirmPassword;
-  const passwordsMismatch = form.confirmPassword && form.password !== form.confirmPassword;
+  const match = form.confirmPassword && form.password === form.confirmPassword;
+  const mismatch = form.confirmPassword && form.password !== form.confirmPassword;
 
   return (
     <>
-      <h2 className="text-2xl font-bold text-white mb-1">Create account</h2>
-      <p className="text-gray-400 mb-6">Join CodeLab as a student</p>
-
+      <div className="mb-6">
+        <h2 className="text-2xl font-black tracking-wider mb-1" style={{ color: '#DCB43C', fontFamily: 'Georgia, serif' }}>
+          JOIN THE TEAM
+        </h2>
+        <p className="text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>Create your CodeLab account</p>
+      </div>
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Full name */}
-        <Field
-          label="Full Name"
-          value={form.fullName}
-          onChange={set('fullName')}
-          placeholder="Jane Smith"
-        />
-
-        {/* Username */}
+        <Field label="FULL NAME" value={form.fullName} onChange={set('fullName')} placeholder="Your full name" />
         <div>
-          <label className="block text-sm font-medium text-gray-400 mb-1.5">Username</label>
+          <label className="block text-xs font-semibold mb-1.5 tracking-widest" style={{ color: 'rgba(220,180,60,0.6)' }}>USERNAME</label>
           <div className="relative">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-600 font-mono text-sm">@</span>
-            <input
-              type="text"
-              value={form.username}
-              onChange={set('username')}
-              placeholder="janesmith"
-              required
-              className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-8 pr-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-colors font-mono"
-            />
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-mono" style={{ color: 'rgba(220,180,60,0.4)' }}>@</span>
+            <input type="text" value={form.username} onChange={set('username')} placeholder="yourname" required
+              className="w-full rounded-lg pl-8 pr-4 py-3 text-sm focus:outline-none"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(220,180,60,0.2)', color: '#e5e5e5', fontFamily: 'monospace' }}
+              onFocus={e => e.target.style.borderColor = 'rgba(220,180,60,0.7)'}
+              onBlur={e => e.target.style.borderColor = 'rgba(220,180,60,0.2)'} />
           </div>
-          <p className="text-xs text-gray-600 mt-1">Letters, numbers, underscores only</p>
         </div>
-
-        {/* Email */}
-        <Field
-          label="Email Address"
-          type="email"
-          value={form.email}
-          onChange={set('email')}
-          placeholder="jane@university.edu"
-        />
-
-        {/* Password */}
+        <Field label="EMAIL" type="email" value={form.email} onChange={set('email')} placeholder="you@university.edu" />
         <div>
-          <Field
-            label="Password"
-            type={showPass ? 'text' : 'password'}
-            value={form.password}
-            onChange={set('password')}
-            placeholder="Min. 6 characters"
-            suffix={
-              <button type="button" onClick={() => setShowPass(p => !p)} className="text-gray-500 hover:text-gray-300 transition-colors">
-                {showPass ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            }
-          />
+          <Field label="PASSWORD" type={showPass ? 'text' : 'password'} value={form.password} onChange={set('password')} placeholder="Min. 6 characters"
+            suffix={<button type="button" onClick={() => setShowPass(p => !p)} style={{ color: 'rgba(220,180,60,0.5)' }}>{showPass ? <EyeOff size={16}/> : <Eye size={16}/>}</button>} />
           <PasswordStrength password={form.password} />
         </div>
-
-        {/* Confirm password */}
         <div>
-          <label className="block text-sm font-medium text-gray-400 mb-1.5">Confirm Password</label>
+          <label className="block text-xs font-semibold mb-1.5 tracking-widest" style={{ color: 'rgba(220,180,60,0.6)' }}>CONFIRM PASSWORD</label>
           <div className="relative">
-            <input
-              type={showConfirm ? 'text' : 'password'}
-              value={form.confirmPassword}
-              onChange={set('confirmPassword')}
-              placeholder="Re-enter password"
-              required
-              className={`w-full bg-gray-900 border rounded-xl px-4 py-3 pr-12 text-white placeholder-gray-600 focus:outline-none focus:ring-1 transition-colors font-mono ${
-                passwordsMismatch
-                  ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
-                  : passwordsMatch
-                  ? 'border-emerald-500 focus:border-emerald-500 focus:ring-emerald-500'
-                  : 'border-gray-700 focus:border-sky-500 focus:ring-sky-500'
-              }`}
-            />
-            <button type="button" onClick={() => setShowConfirm(p => !p)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors">
-              {showConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
+            <input type={showConfirm ? 'text' : 'password'} value={form.confirmPassword} onChange={set('confirmPassword')}
+              placeholder="Re-enter password" required
+              className="w-full rounded-lg px-4 py-3 pr-12 text-sm focus:outline-none"
+              style={{
+                background: 'rgba(255,255,255,0.04)',
+                border: `1px solid ${mismatch ? '#ef4444' : match ? '#22c55e' : 'rgba(220,180,60,0.2)'}`,
+                color: '#e5e5e5', fontFamily: 'monospace',
+              }} />
+            <button type="button" onClick={() => setShowConfirm(p => !p)} className="absolute right-4 top-1/2 -translate-y-1/2"
+              style={{ color: 'rgba(220,180,60,0.5)' }}>{showConfirm ? <EyeOff size={16}/> : <Eye size={16}/>}</button>
           </div>
-          {passwordsMismatch && <p className="text-xs text-red-400 mt-1">Passwords do not match</p>}
-          {passwordsMatch && <p className="text-xs text-emerald-400 mt-1">Passwords match ✓</p>}
+          {mismatch && <p className="text-xs text-red-400 mt-1">Passwords do not match</p>}
+          {match && <p className="text-xs text-green-400 mt-1">Passwords match ✓</p>}
         </div>
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-2"
-        >
-          <UserPlus size={17} />
-          {loading ? 'Creating account…' : 'Create Account'}
-        </button>
+        <HeroButton loading={loading} label="ENLIST NOW" loadingLabel="ENLISTING…" icon={UserPlus} />
       </form>
-
-      <p className="mt-6 text-center text-sm text-gray-500">
-        Already have an account?{' '}
-        <button onClick={onSwitch} className="text-sky-400 hover:text-sky-300 font-medium transition-colors">
-          Sign in
-        </button>
+      <p className="mt-5 text-center text-xs" style={{ color: 'rgba(255,255,255,0.3)' }}>
+        Already a hero?{' '}
+        <button onClick={onSwitch} className="font-semibold" style={{ color: '#DCB43C' }}>Sign in</button>
       </p>
     </>
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PAGE SHELL
-// ══════════════════════════════════════════════════════════════════════════════
+// ══ PAGE SHELL ════════════════════════════════════════════════════════════════
 export default function LoginPage() {
-  const [tab, setTab] = useState('login'); // 'login' | 'register'
+  const [tab, setTab] = useState('login');
 
   return (
-    <div className="min-h-screen bg-gray-950 flex">
+    <div className="min-h-screen flex" style={{ background: '#0a0a0f' }}>
       <LeftPanel />
 
       {/* Right panel */}
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="w-full max-w-md">
-          <MobileLogo />
+      <div className="flex-1 flex items-center justify-center p-8 relative overflow-hidden">
+        {/* subtle bg glow */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 rounded-full opacity-5 pointer-events-none"
+          style={{ background: 'radial-gradient(circle, #DCB43C, transparent)' }} />
 
-          {/* Tab switcher */}
-          <div className="flex bg-gray-900 border border-gray-800 rounded-xl p-1 mb-8">
-            {[['login', 'Sign In', LogIn], ['register', 'Sign Up', UserPlus]].map(([key, label, Icon]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                  tab === key
-                    ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20'
-                    : 'text-gray-500 hover:text-gray-300'
-                }`}
-              >
-                <Icon size={15} />
-                {label}
-              </button>
-            ))}
+        <div className="relative w-full max-w-md">
+
+          {/* Mobile logo */}
+          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
+            <AvengersMark size={36} glow />
+            <span className="text-xl font-black tracking-widest" style={{ color: '#DCB43C', fontFamily: 'Georgia, serif' }}>CODELAB</span>
           </div>
 
-          {/* Form */}
-          <div className="transition-all duration-200">
+          {/* Card */}
+          <div className="rounded-2xl p-8" style={{
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(220,180,60,0.15)',
+            backdropFilter: 'blur(20px)',
+            boxShadow: '0 25px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(220,180,60,0.05)',
+          }}>
+            {/* Shield icon top */}
+            <div className="flex justify-center mb-6">
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center"
+                style={{ background: 'rgba(220,180,60,0.1)', border: '1px solid rgba(220,180,60,0.2)' }}>
+                <Shield size={22} style={{ color: '#DCB43C' }} />
+              </div>
+            </div>
+
+            {/* Tab switcher */}
+            <div className="flex rounded-lg p-1 mb-8 gap-1"
+              style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(220,180,60,0.1)' }}>
+              {[['login', 'SIGN IN', LogIn], ['register', 'SIGN UP', UserPlus]].map(([key, label, Icon]) => (
+                <button key={key} onClick={() => setTab(key)}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-md text-xs font-bold tracking-widest transition-all duration-200"
+                  style={tab === key
+                    ? { background: 'linear-gradient(135deg,#DCB43C,#B8860B)', color: '#0a0a0f' }
+                    : { color: 'rgba(220,180,60,0.4)' }}>
+                  <Icon size={13} />
+                  {label}
+                </button>
+              ))}
+            </div>
+
             {tab === 'login'
               ? <LoginForm onSwitch={() => setTab('register')} />
               : <RegisterForm onSwitch={() => setTab('login')} />
             }
           </div>
+
+          {/* Bottom tagline */}
+          <p className="text-center text-xs mt-4 tracking-widest" style={{ color: 'rgba(220,180,60,0.25)' }}>
+            WHATEVER IT TAKES
+          </p>
         </div>
       </div>
     </div>
