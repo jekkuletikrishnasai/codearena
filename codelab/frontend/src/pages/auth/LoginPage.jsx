@@ -431,7 +431,7 @@ function RegisterForm({ onSwitch }) {
     if (err) return toast.error(err);
     setLoading(true);
     try {
-      await api.post('/auth/register', {
+      await api.post('/api/auth/register', {
         username: form.username.toLowerCase(),
         email:    form.email.toLowerCase(),
         password: form.password,
