@@ -132,19 +132,22 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
 // PUT /api/assignments/:id (admin)
 router.put('/:id', authenticate, requireAdmin, async (req, res) => {
   const { title, description, dueDate, problemIds, studentIds } = req.body;
+  // Convert empty string to null so PostgreSQL accepts it for TIMESTAMP column
+  const dueDateValue = dueDate && dueDate.trim() !== '' ? dueDate : null;
+
   const client = await getClient();
   try {
     await client.query('BEGIN');
     await client.query(
       'UPDATE assignments SET title=$1, description=$2, due_date=$3, updated_at=NOW() WHERE id=$4',
-      [title, description, dueDate, req.params.id]
+      [title, description || null, dueDateValue, req.params.id]
     );
 
     if (problemIds !== undefined) {
       await client.query('DELETE FROM assignment_problems WHERE assignment_id=$1', [req.params.id]);
       for (let i = 0; i < problemIds.length; i++) {
         await client.query(
-          'INSERT INTO assignment_problems (assignment_id, problem_id, order_index) VALUES ($1, $2, $3)',
+          'INSERT INTO assignment_problems (assignment_id, problem_id, order_index) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.id, problemIds[i], i]
         );
       }
@@ -154,7 +157,7 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
       await client.query('DELETE FROM assignment_students WHERE assignment_id=$1', [req.params.id]);
       for (const sid of studentIds) {
         await client.query(
-          'INSERT INTO assignment_students (assignment_id, student_id) VALUES ($1, $2)',
+          'INSERT INTO assignment_students (assignment_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
           [req.params.id, sid]
         );
       }
@@ -164,7 +167,8 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
     res.json({ message: 'Assignment updated' });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Update assignment error:', err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
   } finally {
     client.release();
   }
