@@ -10,12 +10,16 @@ router.get('/students', authenticate, requireAdmin, async (req, res) => {
   try {
     const result = await query(`
       SELECT
-        u.id, u.username, u.email, u.full_name, u.created_at,
-        COUNT(s.id)                                                        AS total_submissions,
-        COUNT(s.id) FILTER (WHERE s.status = 'accepted')                   AS accepted_submissions,
-        COUNT(DISTINCT s.problem_id) FILTER (WHERE s.status = 'accepted')  AS problems_solved
+        u.id,
+        u.username,
+        u.email,
+        u.full_name,
+        u.created_at,
+        COUNT(s.id)                                                         AS total_submissions,
+        COUNT(s.id) FILTER (WHERE s.status = 'accepted')                    AS accepted_submissions,
+        COUNT(DISTINCT s.problem_id) FILTER (WHERE s.status = 'accepted')   AS problems_solved
       FROM users u
-      LEFT JOIN submissions s ON s.user_id = u.id
+      LEFT JOIN submissions s ON s.student_id = u.id
       WHERE u.role = 'student'
       GROUP BY u.id
       ORDER BY u.full_name ASC
@@ -73,7 +77,7 @@ router.get('/admins', authenticate, requireAdmin, async (req, res) => {
 // ── DELETE /api/users/:id ─────────────────────────────────────────────────────
 router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
   try {
-    const targetId = parseInt(req.params.id);
+    const targetId = req.params.id;
     if (targetId === req.user.id)
       return res.status(400).json({ error: 'Cannot delete your own account' });
 
