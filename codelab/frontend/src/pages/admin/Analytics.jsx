@@ -26,9 +26,21 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function AdminAnalytics() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const fetchData = () => {
+    setLoading(true);
+    setError(false);
+    api.get('/api/analytics/dashboard')
+      .then(res => setData(res.data))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    api.get('/api/analytics/dashboard').then(res => setData(res.data)).finally(() => setLoading(false));
+    // Small delay ensures auth token is attached to request
+    const t = setTimeout(fetchData, 150);
+    return () => clearTimeout(t);
   }, []);
 
   const downloadReport = async () => {
@@ -45,7 +57,19 @@ export default function AdminAnalytics() {
   };
 
   if (loading) return (
-    <div className="p-8 flex justify-center"><div className="w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div>
+    <div className="p-8 flex justify-center items-center min-h-64">
+      <div className="w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+    </div>
+  );
+
+  if (error || !data) return (
+    <div className="p-8 flex flex-col items-center justify-center min-h-64 gap-4">
+      <p className="text-gray-400">Failed to load analytics.</p>
+      <button onClick={fetchData}
+        className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-white rounded-lg text-sm font-medium transition-colors">
+        Retry
+      </button>
+    </div>
   );
 
   const statusData = (data?.submissionsByStatus || []).map(s => ({
