@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS test_case_results (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   submission_id UUID REFERENCES submissions(id) ON DELETE CASCADE NOT NULL,
   test_case_id UUID REFERENCES test_cases(id) ON DELETE CASCADE NOT NULL,
-  status VARCHAR(30) NOT NULL CHECK (status IN ('passed', 'failed', 'time_limit_exceeded', 'runtime_error')),
+  status VARCHAR(30) NOT NULL CHECK (status IN ('passed', 'failed', 'time_limit_exceeded', 'runtime_error', 'compilation_error')),
   actual_output TEXT,
   execution_time_ms INTEGER,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
