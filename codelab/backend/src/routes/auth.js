@@ -1,65 +1,118 @@
-const jwt = require('jsonwebtoken');
-const { query } = require('../db');
+const express  = require('express');
+const bcrypt   = require('bcryptjs');
+const jwt      = require('jsonwebtoken');
+const { query }         = require('../db');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 
-// ── Simple in-memory cache to avoid DB hit on every request ──────────────────
-// JWT already contains user info — we only need DB to check if user still exists.
-// Cache for 60 seconds to massively reduce DB load under concurrent polling.
-const userCache = new Map(); // userId -> { user, expiresAt }
-const CACHE_TTL_MS = 60000; // 60 seconds
+const router = express.Router();
 
-async function getCachedUser(userId) {
-  const cached = userCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.user;
-  }
-  // Cache miss — hit DB
-  const result = await query('SELECT id, username, email, full_name, role FROM users WHERE id = $1', [userId]);
-  const user = result.rows[0] || null;
-  if (user) {
-    userCache.set(userId, { user, expiresAt: Date.now() + CACHE_TTL_MS });
-    // Prevent unbounded growth
-    if (userCache.size > 500) {
-      const now = Date.now();
-      for (const [k, v] of userCache) {
-        if (v.expiresAt < now) userCache.delete(k);
-      }
-    }
-  }
-  return user;
-}
-
-const authenticate = async (req, res, next) => {
+// ── POST /api/auth/login ──────────────────────────────────────────────────
+router.post('/login', async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
+    const { username, password } = req.body;
+    if (!username || !password)
+      return res.status(400).json({ error: 'Username and password required' });
 
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const result = await query(
+      'SELECT * FROM users WHERE username = $1 OR email = $1', [username]
+    );
+    if (result.rows.length === 0)
+      return res.status(401).json({ error: 'Invalid credentials' });
 
-    // Use cache instead of hitting DB every request
-    const user = await getCachedUser(decoded.userId || decoded.id);
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
+    const user = result.rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid)
+      return res.status(401).json({ error: 'Invalid credentials' });
 
-    req.user = user;
-    next();
+    const token = jwt.sign(
+      { userId: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.json({
+      token,
+      user: { id: user.id, username: user.username, email: user.email, role: user.role, fullName: user.full_name },
+    });
   } catch (err) {
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-    console.error('Auth middleware error:', err);
-    return res.status(500).json({ error: 'Authentication error' });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
-};
+});
 
-const requireAdmin = (req, res, next) => {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin access required' });
+// ── POST /api/auth/register  (students only — public) ─────────────────────
+router.post('/register', async (req, res) => {
+  try {
+    const { username, email, password, fullName } = req.body;
+    if (!username || !email || !password || !fullName)
+      return res.status(400).json({ error: 'All fields required' });
+
+    const existing = await query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]
+    );
+    if (existing.rows.length > 0)
+      return res.status(409).json({ error: 'Username or email already exists' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await query(
+      `INSERT INTO users (username, email, password_hash, role, full_name)
+       VALUES ($1, $2, $3, 'student', $4)
+       RETURNING id, username, email, role, full_name`,
+      [username, email, passwordHash, fullName]
+    );
+
+    const user = result.rows[0];
+    const token = jwt.sign(
+      { userId: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, username: user.username, email: user.email, role: user.role, fullName: user.full_name },
+    });
+  } catch (err) {
+    console.error('Register error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
-  next();
-};
+});
 
-module.exports = { authenticate, requireAdmin };
+// ── POST /api/auth/create-admin  (existing admin only) ───────────────────
+// Only a logged-in admin can create another admin/instructor
+router.post('/create-admin', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { username, email, password, fullName } = req.body;
+    if (!username || !email || !password || !fullName)
+      return res.status(400).json({ error: 'All fields required' });
+
+    const existing = await query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]
+    );
+    if (existing.rows.length > 0)
+      return res.status(409).json({ error: 'Username or email already exists' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await query(
+      `INSERT INTO users (username, email, password_hash, role, full_name)
+       VALUES ($1, $2, $3, 'admin', $4)
+       RETURNING id, username, email, role, full_name`,
+      [username, email, passwordHash, fullName]
+    );
+
+    res.status(201).json({
+      message: 'Admin/Instructor created successfully',
+      user: result.rows[0],
+    });
+  } catch (err) {
+    console.error('Create admin error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────
+router.get('/me', authenticate, async (req, res) => {
+  res.json({ user: req.user });
+});
+
+module.exports = router;
