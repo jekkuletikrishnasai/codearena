@@ -98,8 +98,19 @@ async function runTestCases(code, language, testCases, timeLimitMs = 5000) {
       const actual   = result.stdout.trim();
       const expected = tc.expected_output.trim();
 
+      // Detect compilation failure by inspecting stderr
+      const isCompileError = result.exitCode !== 0 && (
+        result.stderr.includes('error: compilation failed') ||   // Java single-file
+        result.stderr.includes('javac') ||                        // javac output
+        result.stderr.includes(': error:') ||                     // gcc/g++ style
+        result.stderr.includes('SyntaxError') ||                  // Python syntax
+        result.stderr.includes('error: expected') ||              // C/C++
+        result.stderr.includes('compilation failed')              // generic
+      );
+
       let status;
       if (result.timedOut)            status = 'time_limit_exceeded';
+      else if (isCompileError)        status = 'compilation_error';
       else if (result.exitCode !== 0) status = 'runtime_error';
       else if (actual === expected)   status = 'passed';
       else                            status = 'failed';

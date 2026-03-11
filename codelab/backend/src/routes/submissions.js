@@ -121,9 +121,10 @@ async function processSubmission(submissionId, code, language, testCases, proble
     const total = results.length;
 
     let overallStatus = 'accepted';
-    if (results.some(r => r.status === 'time_limit_exceeded')) overallStatus = 'time_limit_exceeded';
-    else if (results.some(r => r.status === 'runtime_error')) overallStatus = 'runtime_error';
-    else if (results.some(r => r.status === 'failed')) overallStatus = 'wrong_answer';
+    if (results.some(r => r.status === 'compilation_error'))   overallStatus = 'compilation_error';
+    else if (results.some(r => r.status === 'time_limit_exceeded')) overallStatus = 'time_limit_exceeded';
+    else if (results.some(r => r.status === 'runtime_error'))  overallStatus = 'runtime_error';
+    else if (results.some(r => r.status === 'failed'))         overallStatus = 'wrong_answer';
 
     const avgTime = results.reduce((sum, r) => sum + (r.executionTimeMs || 0), 0) / results.length;
 

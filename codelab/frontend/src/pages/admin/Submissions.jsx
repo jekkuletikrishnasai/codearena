@@ -9,7 +9,7 @@ const StatusBadge = ({ status }) => {
     wrong_answer: { cls: 'bg-red-500/20 text-red-400', dot: 'bg-red-400' },
     time_limit_exceeded: { cls: 'bg-yellow-500/20 text-yellow-400', dot: 'bg-yellow-400' },
     runtime_error: { cls: 'bg-orange-500/20 text-orange-400', dot: 'bg-orange-400' },
-    compilation_error: { cls: 'bg-red-500/20 text-red-400', dot: 'bg-red-400' },
+    compilation_error: { cls: 'bg-orange-500/20 text-orange-400', dot: 'bg-orange-400' },
     running: { cls: 'bg-blue-500/20 text-blue-400', dot: 'bg-blue-400 animate-pulse' },
     pending: { cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-400' },
   };
@@ -30,13 +30,13 @@ export default function AdminSubmissions() {
 
   const load = () => {
     setLoading(true);
-    api.get('/api/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
+    api.get('/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
 
   const viewSubmission = async (id) => {
-    const res = await api.get(`/api/submissions/${id}`);
+    const res = await api.get(`/submissions/${id}`);
     setSelected(res.data.submission);
   };
 
@@ -58,7 +58,7 @@ export default function AdminSubmissions() {
 
         {/* Status filter */}
         <div className="flex flex-wrap gap-2 mb-4">
-          {['all', 'accepted', 'wrong_answer', 'runtime_error', 'running', 'pending'].map(s => (
+          {['all', 'accepted', 'wrong_answer', 'runtime_error', 'compilation_error', 'running', 'pending'].map(s => (
             <button key={s} onClick={() => setFilter(s)}
               className={`px-3 py-1.5 rounded-lg text-xs font-mono capitalize transition-colors ${
                 filter === s ? 'bg-sky-500/20 text-sky-400 border border-sky-500/50' : 'bg-gray-800 text-gray-500 border border-gray-700 hover:border-gray-600'

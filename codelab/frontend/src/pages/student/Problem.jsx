@@ -340,13 +340,23 @@ export default function StudentProblem() {
                   </div>
                 ) : (
                   <div>
-                    <div className={`rounded-xl p-4 mb-5 ${submissionResult.status === 'accepted' ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                    <div className={`rounded-xl p-4 mb-5 ${
+                      submissionResult.status === 'accepted'         ? 'bg-emerald-500/10 border border-emerald-500/30' :
+                      submissionResult.status === 'compilation_error'? 'bg-orange-500/10 border border-orange-500/30' :
+                      submissionResult.status === 'time_limit_exceeded' ? 'bg-yellow-500/10 border border-yellow-500/30' :
+                      'bg-red-500/10 border border-red-500/30'}`}>
                       <div className="flex items-center gap-3">
                         {submissionResult.status === 'accepted'
                           ? <CheckCircle size={24} className="text-emerald-400" />
+                          : submissionResult.status === 'compilation_error'
+                          ? <AlertCircle size={24} className="text-orange-400" />
                           : <XCircle size={24} className="text-red-400" />}
                         <div>
-                          <div className={`font-semibold capitalize ${submissionResult.status === 'accepted' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          <div className={`font-semibold capitalize ${
+                            submissionResult.status === 'accepted'          ? 'text-emerald-400' :
+                            submissionResult.status === 'compilation_error' ? 'text-orange-400' :
+                            submissionResult.status === 'time_limit_exceeded' ? 'text-yellow-400' :
+                            'text-red-400'}`}>
                             {submissionResult.status.replace(/_/g, ' ')}
                           </div>
                           <div className="text-xs text-gray-500 mt-0.5">
