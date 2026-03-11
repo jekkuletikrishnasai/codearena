@@ -26,7 +26,7 @@ function markRun(studentId) {
 
 // ── Execution queue: max 8 concurrent executions ──────────────────────────────
 let activeExecutions = 0;
-const MAX_CONCURRENT = 8;
+const MAX_CONCURRENT = 10;
 const executionQueue = [];
 
 function runWithQueue(fn) {
@@ -112,10 +112,45 @@ router.post('/', authenticate, async (req, res) => {
 async function processSubmission(submissionId, code, language, testCases, problem) {
   const client = await getClient();
   try {
-    const dockerAvailable = await isDockerAvailable();
-    const runFn = dockerAvailable ? runTestCases : runTestCasesSimulated;
-
-    const results = await runFn(code, language, testCases, problem.time_limit_ms);
+    // Run each test case individually through the shared queue
+    // This prevents 20 submissions × 3 test cases = 60 simultaneous Java processes
+    const results = await Promise.all(
+      testCases.map(tc =>
+        runWithQueue(() =>
+          executeCode(code, language, tc.input, problem.time_limit_ms || 5000)
+            .then(result => {
+              const actual   = result.stdout.trim();
+              const expected = tc.expected_output.trim();
+              const isCompileError = result.exitCode !== 0 && (
+                result.stderr.includes('error: compilation failed') ||
+                result.stderr.includes('javac') ||
+                result.stderr.includes(': error:') ||
+                result.stderr.includes('SyntaxError') ||
+                result.stderr.includes('error: expected') ||
+                result.stderr.includes('compilation failed')
+              );
+              let status;
+              if (result.timedOut)            status = 'time_limit_exceeded';
+              else if (isCompileError)        status = 'compilation_error';
+              else if (result.exitCode !== 0) status = 'runtime_error';
+              else if (actual === expected)   status = 'passed';
+              else                            status = 'failed';
+              return {
+                testCaseId: tc.id, status,
+                actualOutput: result.stdout,
+                executionTimeMs: result.executionTimeMs,
+                expected, isHidden: tc.is_hidden,
+              };
+            })
+            .catch(err => ({
+              testCaseId: tc.id, status: 'runtime_error',
+              actualOutput: `Error: ${err.message}`,
+              executionTimeMs: 0,
+              expected: tc.expected_output, isHidden: tc.is_hidden,
+            }))
+        )
+      )
+    );
 
     const passed = results.filter(r => r.status === 'passed').length;
     const total = results.length;
