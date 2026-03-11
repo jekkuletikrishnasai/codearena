@@ -1,19 +1,21 @@
 const { Pool } = require('pg');
-
-const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
-  max: 10,                        // ← add this
+  max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,  // ← add this
+  connectionTimeoutMillis: 5000,
 });
 
+// Only log once — pool.on('connect') fires per-connection, not per-pool
+let loggedConnection = false;
 pool.on('connect', () => {
-  console.log('✅ Connected to PostgreSQL database');
+  if (!loggedConnection) {
+    loggedConnection = true;
+    console.log('✅ Connected to PostgreSQL database');
+  }
 });
 
 pool.on('error', (err) => {
@@ -22,10 +24,20 @@ pool.on('error', (err) => {
 
 const query = (text, params) => pool.query(text, params);
 
-const getClient = () => pool.connect();
-
-module.exports = {
-  query,
-  getClient,
-  pool
+// Safe getClient with auto-release guard (prevents connection leaks)
+const getClient = async () => {
+  const client = await pool.connect();
+  const originalRelease = client.release.bind(client);
+  const timeout = setTimeout(() => {
+    console.error('⚠️  DB client leaked — auto-releasing after 30s');
+    originalRelease();
+  }, 30000);
+  client.release = () => {
+    clearTimeout(timeout);
+    client.release = originalRelease; // prevent double-release
+    originalRelease();
+  };
+  return client;
 };
+
+module.exports = { query, getClient, pool };
