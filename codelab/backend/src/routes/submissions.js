@@ -26,24 +26,56 @@ function markRun(studentId) {
 
 // ── Execution queue: max 8 concurrent executions ──────────────────────────────
 let activeExecutions = 0;
-const MAX_CONCURRENT = 10;
-const executionQueue = [];
+const MAX_CONCURRENT = 5;        // Max concurrent Java executions
+const MAX_CONCURRENT_SUBMIT = 4; // Max submissions being processed simultaneously
+let activeSubmissions = 0;
+const submitQueue = [];
 
-function runWithQueue(fn) {
+function runWithSubmitQueue(fn) {
   return new Promise((resolve, reject) => {
     const task = () => {
-      activeExecutions++;
+      activeSubmissions++;
       fn()
-        .then(resolve)
-        .catch(reject)
+        .then(resolve).catch(reject)
         .finally(() => {
-          activeExecutions--;
-          if (executionQueue.length > 0) {
-            const next = executionQueue.shift();
-            next();
-          }
+          activeSubmissions--;
+          if (submitQueue.length > 0) submitQueue.shift()();
         });
     };
+    if (activeSubmissions < MAX_CONCURRENT_SUBMIT) task();
+    else submitQueue.push(task);
+  });
+}
+const executionQueue = [];
+
+function runWithQueue(fn, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const timeoutHandle = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('Execution queue timeout — server too busy'));
+      }
+    }, timeoutMs);
+
+    const task = () => {
+      if (settled) {
+        // Already timed out while waiting in queue — skip and free slot
+        activeExecutions--;
+        if (executionQueue.length > 0) executionQueue.shift()();
+        return;
+      }
+      activeExecutions++;
+      fn()
+        .then(r => { if (!settled) { settled = true; clearTimeout(timeoutHandle); resolve(r); } })
+        .catch(e => { if (!settled) { settled = true; clearTimeout(timeoutHandle); reject(e); } })
+        .finally(() => {
+          activeExecutions--;
+          if (executionQueue.length > 0) executionQueue.shift()();
+        });
+    };
+
     if (activeExecutions < MAX_CONCURRENT) {
       task();
     } else {
@@ -100,7 +132,7 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     // Execute in background with queue to prevent overload
-    runWithQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
+    runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
 
   } catch (err) {
     await client.query('ROLLBACK');
@@ -110,58 +142,68 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 async function processSubmission(submissionId, code, language, testCases, problem) {
+  // ── PHASE 1: Execute code — NO DB client held during this slow phase ──────
+  // We only grab a DB connection AFTER all execution is done (in Phase 2).
+  // This prevents 20 submissions from holding 20 DB connections simultaneously
+  // while waiting for Java to compile/run (which takes 5-40 seconds each).
+  const results = [];
+  for (const tc of testCases) {
+    const result = await runWithQueue(() =>
+      executeCode(code, language, tc.input, problem.time_limit_ms || 5000)
+    ).catch(err => ({
+      stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
+    }));
+
+    const actual   = result.stdout.trim();
+    const expected = tc.expected_output.trim();
+    const isCompileError = result.exitCode !== 0 && (
+      result.stderr.includes('error: compilation failed') ||
+      result.stderr.includes('javac') ||
+      result.stderr.includes(': error:') ||
+      result.stderr.includes('SyntaxError') ||
+      result.stderr.includes('error: expected') ||
+      result.stderr.includes('compilation failed')
+    );
+    let status;
+    if (result.timedOut)            status = 'time_limit_exceeded';
+    else if (isCompileError)        status = 'compilation_error';
+    else if (result.exitCode !== 0) status = 'runtime_error';
+    else if (actual === expected)   status = 'passed';
+    else                            status = 'failed';
+
+    results.push({
+      testCaseId: tc.id, status,
+      actualOutput: result.stdout,
+      errorOutput:  result.stderr,
+      executionTimeMs: result.executionTimeMs,
+      expected, isHidden: tc.is_hidden,
+    });
+
+    // Early exit on compilation error — skip remaining test cases
+    if (status === 'compilation_error') {
+      for (const remaining of testCases.slice(results.length)) {
+        results.push({
+          testCaseId: remaining.id, status: 'compilation_error',
+          actualOutput: '', errorOutput: result.stderr, executionTimeMs: 0,
+          expected: remaining.expected_output, isHidden: remaining.is_hidden,
+        });
+      }
+      break;
+    }
+  }
+
+  // ── PHASE 2: Write results to DB (grab client only NOW, briefly) ──────────
   const client = await getClient();
   try {
-    // Run each test case individually through the shared queue
-    // This prevents 20 submissions × 3 test cases = 60 simultaneous Java processes
-    const results = await Promise.all(
-      testCases.map(tc =>
-        runWithQueue(() =>
-          executeCode(code, language, tc.input, problem.time_limit_ms || 5000)
-            .then(result => {
-              const actual   = result.stdout.trim();
-              const expected = tc.expected_output.trim();
-              const isCompileError = result.exitCode !== 0 && (
-                result.stderr.includes('error: compilation failed') ||
-                result.stderr.includes('javac') ||
-                result.stderr.includes(': error:') ||
-                result.stderr.includes('SyntaxError') ||
-                result.stderr.includes('error: expected') ||
-                result.stderr.includes('compilation failed')
-              );
-              let status;
-              if (result.timedOut)            status = 'time_limit_exceeded';
-              else if (isCompileError)        status = 'compilation_error';
-              else if (result.exitCode !== 0) status = 'runtime_error';
-              else if (actual === expected)   status = 'passed';
-              else                            status = 'failed';
-              return {
-                testCaseId: tc.id, status,
-                actualOutput: result.stdout,
-                executionTimeMs: result.executionTimeMs,
-                expected, isHidden: tc.is_hidden,
-              };
-            })
-            .catch(err => ({
-              testCaseId: tc.id, status: 'runtime_error',
-              actualOutput: `Error: ${err.message}`,
-              executionTimeMs: 0,
-              expected: tc.expected_output, isHidden: tc.is_hidden,
-            }))
-        )
-      )
-    );
-
     const passed = results.filter(r => r.status === 'passed').length;
-    const total = results.length;
 
     let overallStatus = 'accepted';
-    if (results.some(r => r.status === 'compilation_error'))   overallStatus = 'compilation_error';
+    if (results.some(r => r.status === 'compilation_error'))        overallStatus = 'compilation_error';
     else if (results.some(r => r.status === 'time_limit_exceeded')) overallStatus = 'time_limit_exceeded';
-    else if (results.some(r => r.status === 'runtime_error'))  overallStatus = 'runtime_error';
-    else if (results.some(r => r.status === 'failed'))         overallStatus = 'wrong_answer';
+    else if (results.some(r => r.status === 'runtime_error'))       overallStatus = 'runtime_error';
+    else if (results.some(r => r.status === 'failed'))              overallStatus = 'wrong_answer';
 
-    const avgTime = results.reduce((sum, r) => sum + (r.executionTimeMs || 0), 0) / results.length;
+    const avgTime = results.reduce((sum, r) => sum + (r.executionTimeMs || 0), 0) / (results.length || 1);
 
     await client.query('BEGIN');
 
@@ -175,18 +217,21 @@ async function processSubmission(submissionId, code, language, testCases, proble
         INSERT INTO test_case_results (submission_id, test_case_id, status, actual_output, execution_time_ms)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT DO NOTHING
-      `, [submissionId, result.testCaseId, result.status, result.actualOutput?.substring(0, 10000), result.executionTimeMs]);
+      `, [submissionId, result.testCaseId, result.status,
+          (result.actualOutput || result.errorOutput || '').substring(0, 10000),
+          result.executionTimeMs]);
     }
 
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
-    await client.query(`UPDATE submissions SET status='runtime_error' WHERE id=$1`, [submissionId]);
-    console.error('Process submission error:', err);
+    await query(`UPDATE submissions SET status='runtime_error' WHERE id=$1`, [submissionId]);
+    console.error('Process submission DB error:', err);
   } finally {
     client.release();
   }
 }
+
 
 // POST /api/submissions/run - run code without submitting
 router.post('/run', authenticate, async (req, res) => {
