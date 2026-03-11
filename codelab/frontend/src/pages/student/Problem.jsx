@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
-import { Play, Send, ArrowLeft, ChevronDown, ChevronUp, CheckCircle, XCircle, Clock, AlertCircle, Loader } from 'lucide-react';
+import { Play, Send, ArrowLeft, CheckCircle, XCircle, Clock, Loader, AlertCircle } from 'lucide-react';
 
-const LANGUAGE_MAP = { python: 'python', javascript: 'javascript', java: 'java', cpp: 'cpp', c: 'c' };
 const MONACO_LANG = { python: 'python', javascript: 'javascript', java: 'java', cpp: 'cpp', c: 'c' };
 
 const STARTERS = {
@@ -21,24 +20,38 @@ const DiffBadge = ({ d }) => {
   return <span className={`text-xs px-2 py-0.5 rounded-full capitalize font-mono ${c[d]}`}>{d}</span>;
 };
 
+// Returns a human-readable status message based on elapsed seconds + language
+function getRunStatusMsg(elapsed, language) {
+  if (elapsed < 2)  return 'Sending to server…';
+  if (elapsed < 6)  return language === 'java' || language === 'cpp' || language === 'c'
+                            ? `Compiling ${language.toUpperCase()}…`
+                            : 'Starting execution…';
+  if (elapsed < 15) return 'Executing your code…';
+  if (elapsed < 25) return 'Still running… (server is busy)';
+  if (elapsed < 35) return 'Almost done, hang tight…';
+  return 'Finishing up…';
+}
+
 export default function StudentProblem() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [problem, setProblem] = useState(null);
-  const [language, setLanguage] = useState('python');
-  const [code, setCode] = useState(STARTERS.python);
-  const [stdin, setStdin] = useState('');
-  const [output, setOutput] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [submissionId, setSubmissionId] = useState(null);
+  const [problem, setProblem]               = useState(null);
+  const [language, setLanguage]             = useState('python');
+  const [code, setCode]                     = useState(STARTERS.python);
+  const [stdin, setStdin]                   = useState('');
+  const [output, setOutput]                 = useState(null);
+  const [submitting, setSubmitting]         = useState(false);
+  const [running, setRunning]               = useState(false);
+  const [runElapsed, setRunElapsed]         = useState(0);   // seconds since run started
+  const [runStatusMsg, setRunStatusMsg]     = useState('');  // text shown in output panel
+  const [submissionId, setSubmissionId]     = useState(null);
   const [submissionResult, setSubmissionResult] = useState(null);
-  const [polling, setPolling] = useState(false);
-  const [activeTab, setActiveTab] = useState('description');
-  const [descExpanded, setDescExpanded] = useState(true);
+  const [polling, setPolling]               = useState(false);
+  const [activeTab, setActiveTab]           = useState('description');
+  const timerRef                            = useRef(null);
 
   useEffect(() => {
-    api.get(`/problems/${id}`).then(res => {
+    api.get(`/api/problems/${id}`).then(res => {
       const p = res.data.problem;
       setProblem(p);
       const allowed = p.allowed_languages[0] || 'python';
@@ -58,19 +71,36 @@ export default function StudentProblem() {
   const runCode = async () => {
     setRunning(true);
     setOutput(null);
+    setRunElapsed(0);
+    setRunStatusMsg(getRunStatusMsg(0, language));
+
+    // Start live elapsed timer
+    const startTime = Date.now();
+    timerRef.current = setInterval(() => {
+      const sec = Math.floor((Date.now() - startTime) / 1000);
+      setRunElapsed(sec);
+      setRunStatusMsg(getRunStatusMsg(sec, language));
+    }, 500);
+
     try {
       const res = await api.post('/api/submissions/run', { code, language, stdin });
       setOutput(res.data);
     } catch (err) {
-      // Show the rate limit message if returned from backend
-      const msg = err.response?.data?.error;
-      if (err.response?.status === 429) {
-        toast.error(msg || 'Please wait a moment before running again.');
+      const status = err.response?.status;
+      const msg    = err.response?.data?.error;
+      if (status === 429) {
+        toast.error(msg || 'Please wait a few seconds before running again.', { icon: '⏸' });
+        setOutput({ _rateLimited: true, message: msg || 'Rate limited — please wait a moment.' });
       } else {
-        toast.error(msg || 'Run failed');
+        toast.error(msg || 'Run failed. Please try again.');
+        setOutput({ _error: true, message: msg || 'Execution failed.' });
       }
     } finally {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
       setRunning(false);
+      // keep elapsed visible briefly so student knows how long it took
+      setTimeout(() => { setRunElapsed(0); setRunStatusMsg(''); }, 4000);
     }
   };
 
@@ -82,7 +112,7 @@ export default function StudentProblem() {
       const sid = res.data.submission.id;
       setSubmissionId(sid);
       setActiveTab('results');
-      toast.success('Submitted! Running test cases...');
+      toast.success('Submitted! Running test cases…');
       pollResult(sid);
     } catch (err) {
       toast.error('Submission failed');
@@ -93,11 +123,10 @@ export default function StudentProblem() {
   const pollResult = useCallback(async (sid) => {
     setPolling(true);
     let attempts = 0;
-    const maxAttempts = 30;
     const interval = setInterval(async () => {
       attempts++;
       try {
-        const res = await api.get(`/submissions/${sid}`);
+        const res = await api.get(`/api/submissions/${sid}`);
         const sub = res.data.submission;
         if (sub.status !== 'running' && sub.status !== 'pending') {
           setSubmissionResult(sub);
@@ -108,7 +137,7 @@ export default function StudentProblem() {
           else toast.error(`Result: ${sub.status.replace(/_/g, ' ')}`);
         }
       } catch {}
-      if (attempts >= maxAttempts) {
+      if (attempts >= 30) {
         clearInterval(interval);
         setPolling(false);
         setSubmitting(false);
@@ -116,11 +145,99 @@ export default function StudentProblem() {
     }, 1500);
   }, []);
 
+  // Cleanup timer on unmount
+  useEffect(() => () => clearInterval(timerRef.current), []);
+
   if (!problem) return (
     <div className="flex justify-center items-center h-full p-8">
       <div className="w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
     </div>
   );
+
+  // ── RUN BUTTON label & style ──
+  const runBtnContent = running ? (
+    <>
+      <Loader size={14} className="animate-spin flex-shrink-0" />
+      <span className="font-mono tabular-nums">{runElapsed}s</span>
+    </>
+  ) : (
+    <><Play size={14} /> Run</>
+  );
+
+  // ── STDOUT PANEL content ──
+  const renderOutput = () => {
+    if (running) {
+      const pct = Math.min((runElapsed / 45) * 100, 97);
+      return (
+        <div className="flex flex-col gap-3 p-1">
+          {/* Status row */}
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-blue-950/40 border border-blue-800/40">
+            <Loader size={13} className="animate-spin text-blue-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-blue-300">{runStatusMsg}</div>
+              <div className="text-xs text-slate-500 mt-0.5">Your code is running on the server</div>
+            </div>
+            <span className="font-mono text-lg font-bold text-blue-400 tabular-nums flex-shrink-0">
+              {runElapsed}s
+            </span>
+          </div>
+          {/* Progress bar */}
+          <div className="h-0.5 rounded-full bg-slate-800 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-1000"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {/* Compile hint for compiled languages */}
+          {(language === 'java' || language === 'cpp' || language === 'c') && runElapsed < 8 && (
+            <div className="text-xs text-slate-600 font-mono px-1">
+              $ {language === 'java' ? 'javac Solution.java && java Solution' : `g++ solution.cpp -o solution && ./solution`}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (!output) return (
+      <p className="text-xs text-gray-700 font-mono">Run your code to see output here</p>
+    );
+
+    if (output._rateLimited) return (
+      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-yellow-950/30 border border-yellow-800/40">
+        <Clock size={14} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="text-xs font-semibold text-yellow-300">Rate limited</div>
+          <div className="text-xs text-yellow-600 mt-0.5">{output.message}</div>
+        </div>
+      </div>
+    );
+
+    if (output._error) return (
+      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-red-950/30 border border-red-800/40">
+        <AlertCircle size={14} className="text-red-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="text-xs font-semibold text-red-300">Execution failed</div>
+          <div className="text-xs text-red-500 mt-0.5">{output.message}</div>
+        </div>
+      </div>
+    );
+
+    return (
+      <div>
+        {output.stdout && (
+          <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>
+        )}
+        {output.stderr && (
+          <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap mt-2">{output.stderr}</pre>
+        )}
+        <div className="text-xs text-gray-600 mt-2 flex items-center gap-2">
+          <CheckCircle size={11} className="text-emerald-600" />
+          Exit: {output.exitCode} · {output.executionTimeMs}ms
+          {runElapsed > 0 && <span className="text-slate-700">· waited {runElapsed}s</span>}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="h-screen flex flex-col bg-gray-950">
@@ -137,28 +254,40 @@ export default function StudentProblem() {
           className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
           {problem.allowed_languages?.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
-        <button onClick={runCode} disabled={running}
-          className="flex items-center gap-1.5 px-4 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
-          {running ? <Loader size={15} className="animate-spin" /> : <Play size={15} />} Run
+
+        {/* RUN BUTTON — shows live timer when running */}
+        <button
+          onClick={runCode}
+          disabled={running}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all min-w-[80px] justify-center
+            ${running
+              ? 'bg-blue-950 text-blue-300 border border-blue-800/60 cursor-not-allowed'
+              : 'bg-gray-700 hover:bg-gray-600 text-white'
+            }`}
+        >
+          {runBtnContent}
         </button>
+
         <button onClick={submitCode} disabled={submitting}
           className="flex items-center gap-1.5 px-4 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
-          {submitting ? <Loader size={15} className="animate-spin" /> : <Send size={15} />}
-          {submitting ? 'Submitting...' : 'Submit'}
+          {submitting ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
+          {submitting ? 'Submitting…' : 'Submit'}
         </button>
       </div>
 
       {/* Main content: 2 panes */}
       <div className="flex flex-1 overflow-hidden">
+
         {/* Left: Problem description */}
         <div className="w-2/5 flex flex-col border-r border-gray-800 overflow-hidden">
-          {/* Tabs */}
           <div className="flex border-b border-gray-800 flex-shrink-0">
             {['description', 'results'].map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-5 py-2.5 text-sm capitalize transition-colors ${activeTab === tab ? 'text-sky-400 border-b-2 border-sky-500' : 'text-gray-500 hover:text-gray-300'}`}>
                 {tab}
-                {tab === 'results' && polling && <span className="ml-1.5 inline-block w-1.5 h-1.5 bg-sky-400 rounded-full animate-pulse"></span>}
+                {tab === 'results' && polling && (
+                  <span className="ml-1.5 inline-block w-1.5 h-1.5 bg-sky-400 rounded-full animate-pulse" />
+                )}
               </button>
             ))}
           </div>
@@ -174,8 +303,6 @@ export default function StudentProblem() {
                 <div className="prose prose-invert prose-sm max-w-none">
                   <pre className="whitespace-pre-wrap text-sm text-gray-300 font-sans leading-relaxed">{problem.description}</pre>
                 </div>
-
-                {/* Sample test cases */}
                 {problem.testCases?.length > 0 && (
                   <div className="mt-6">
                     <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Sample Test Cases</h3>
@@ -209,17 +336,15 @@ export default function StudentProblem() {
                 ) : polling ? (
                   <div className="text-center py-12">
                     <Loader size={32} className="mx-auto mb-3 text-sky-400 animate-spin" />
-                    <p className="text-gray-400">Running test cases...</p>
+                    <p className="text-gray-400">Running test cases…</p>
                   </div>
                 ) : (
                   <div>
-                    {/* Overall result */}
                     <div className={`rounded-xl p-4 mb-5 ${submissionResult.status === 'accepted' ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
                       <div className="flex items-center gap-3">
                         {submissionResult.status === 'accepted'
                           ? <CheckCircle size={24} className="text-emerald-400" />
-                          : <XCircle size={24} className="text-red-400" />
-                        }
+                          : <XCircle size={24} className="text-red-400" />}
                         <div>
                           <div className={`font-semibold capitalize ${submissionResult.status === 'accepted' ? 'text-emerald-400' : 'text-red-400'}`}>
                             {submissionResult.status.replace(/_/g, ' ')}
@@ -231,8 +356,6 @@ export default function StudentProblem() {
                         </div>
                       </div>
                     </div>
-
-                    {/* Test case results */}
                     <div className="space-y-2">
                       {submissionResult.testCaseResults?.map((r, i) => (
                         <div key={i} className={`rounded-xl border p-3 ${r.status === 'passed' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'}`}>
@@ -264,7 +387,6 @@ export default function StudentProblem() {
 
         {/* Right: Editor + IO */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Monaco Editor */}
           <div className="flex-1 overflow-hidden">
             <Editor
               height="100%"
@@ -292,7 +414,7 @@ export default function StudentProblem() {
           <div className="h-52 border-t border-gray-800 flex flex-shrink-0">
             {/* Stdin */}
             <div className="flex-1 flex flex-col border-r border-gray-800">
-              <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
+              <div className="flex items-center px-4 py-2 bg-gray-900 border-b border-gray-800">
                 <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">stdin</span>
               </div>
               <textarea value={stdin} onChange={e => setStdin(e.target.value)}
@@ -302,26 +424,16 @@ export default function StudentProblem() {
 
             {/* Stdout */}
             <div className="flex-1 flex flex-col">
-              <div className="flex items-center px-4 py-2 bg-gray-900 border-b border-gray-800">
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-900 border-b border-gray-800">
                 <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">stdout</span>
-                {output?.simulated && <span className="ml-2 text-xs text-yellow-500">(simulated)</span>}
+                {running && (
+                  <span className="ml-auto text-xs font-mono tabular-nums text-blue-500 animate-pulse">
+                    {runElapsed}s elapsed
+                  </span>
+                )}
               </div>
               <div className="flex-1 p-3 overflow-auto">
-                {running ? (
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <Loader size={12} className="animate-spin" /> Running...
-                  </div>
-                ) : output ? (
-                  <div>
-                    {output.stdout && <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>}
-                    {output.stderr && <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap mt-2">{output.stderr}</pre>}
-                    <div className="text-xs text-gray-600 mt-2">
-                      Exit: {output.exitCode} · {output.executionTimeMs}ms
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-gray-700 font-mono">Run your code to see output here</p>
-                )}
+                {renderOutput()}
               </div>
             </div>
           </div>
