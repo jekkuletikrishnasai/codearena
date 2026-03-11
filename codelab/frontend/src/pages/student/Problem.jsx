@@ -38,7 +38,7 @@ export default function StudentProblem() {
   const [descExpanded, setDescExpanded] = useState(true);
 
   useEffect(() => {
-    api.get(`/api/problems/${id}`).then(res => {
+    api.get(`/problems/${id}`).then(res => {
       const p = res.data.problem;
       setProblem(p);
       const allowed = p.allowed_languages[0] || 'python';
@@ -62,7 +62,13 @@ export default function StudentProblem() {
       const res = await api.post('/api/submissions/run', { code, language, stdin });
       setOutput(res.data);
     } catch (err) {
-      toast.error('Run failed');
+      // Show the rate limit message if returned from backend
+      const msg = err.response?.data?.error;
+      if (err.response?.status === 429) {
+        toast.error(msg || 'Please wait a moment before running again.');
+      } else {
+        toast.error(msg || 'Run failed');
+      }
     } finally {
       setRunning(false);
     }
@@ -91,7 +97,7 @@ export default function StudentProblem() {
     const interval = setInterval(async () => {
       attempts++;
       try {
-        const res = await api.get(`/api/submissions/${sid}`);
+        const res = await api.get(`/submissions/${sid}`);
         const sub = res.data.submission;
         if (sub.status !== 'running' && sub.status !== 'pending') {
           setSubmissionResult(sub);
@@ -296,13 +302,9 @@ export default function StudentProblem() {
 
             {/* Stdout */}
             <div className="flex-1 flex flex-col">
-              <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
+              <div className="flex items-center px-4 py-2 bg-gray-900 border-b border-gray-800">
                 <span className="text-xs font-mono text-gray-500 uppercase tracking-wider">stdout</span>
-                {output && !running && (
-                  <span className={`text-xs font-mono px-2 py-0.5 rounded ${output.exitCode === 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                    {output.exitCode === 0 ? '✓ OK' : '✗ Error'} · {output.executionTimeMs}ms
-                  </span>
-                )}
+                {output?.simulated && <span className="ml-2 text-xs text-yellow-500">(simulated)</span>}
               </div>
               <div className="flex-1 p-3 overflow-auto">
                 {running ? (
@@ -311,16 +313,11 @@ export default function StudentProblem() {
                   </div>
                 ) : output ? (
                   <div>
-                    {output.stdout
-                      ? <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>
-                      : <p className="text-xs text-gray-600 italic">no output</p>
-                    }
-                    {output.stderr && (
-                      <div className="mt-2 border-t border-gray-800 pt-2">
-                        <p className="text-xs text-red-500 mb-1">stderr / compile error:</p>
-                        <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap">{output.stderr}</pre>
-                      </div>
-                    )}
+                    {output.stdout && <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{output.stdout}</pre>}
+                    {output.stderr && <pre className="font-mono text-xs text-red-400 whitespace-pre-wrap mt-2">{output.stderr}</pre>}
+                    <div className="text-xs text-gray-600 mt-2">
+                      Exit: {output.exitCode} · {output.executionTimeMs}ms
+                    </div>
                   </div>
                 ) : (
                   <p className="text-xs text-gray-700 font-mono">Run your code to see output here</p>

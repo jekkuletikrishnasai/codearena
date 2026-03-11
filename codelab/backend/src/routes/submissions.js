@@ -5,6 +5,53 @@ const { runTestCases, runTestCasesSimulated, executeCode, executeCodeSimulated, 
 
 const router = express.Router();
 
+// ── Rate limiter: 1 execution per student every 5 seconds ─────────────────────
+const lastRunTime = new Map(); // studentId -> timestamp
+const RATE_LIMIT_MS = 5000;   // 5 seconds between runs
+
+function isRateLimited(studentId) {
+  const last = lastRunTime.get(studentId) || 0;
+  return Date.now() - last < RATE_LIMIT_MS;
+}
+function markRun(studentId) {
+  lastRunTime.set(studentId, Date.now());
+  // Clean up old entries every 100 calls to prevent memory leak
+  if (lastRunTime.size > 200) {
+    const cutoff = Date.now() - 60000;
+    for (const [k, v] of lastRunTime) {
+      if (v < cutoff) lastRunTime.delete(k);
+    }
+  }
+}
+
+// ── Execution queue: max 8 concurrent executions ──────────────────────────────
+let activeExecutions = 0;
+const MAX_CONCURRENT = 8;
+const executionQueue = [];
+
+function runWithQueue(fn) {
+  return new Promise((resolve, reject) => {
+    const task = () => {
+      activeExecutions++;
+      fn()
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+          activeExecutions--;
+          if (executionQueue.length > 0) {
+            const next = executionQueue.shift();
+            next();
+          }
+        });
+    };
+    if (activeExecutions < MAX_CONCURRENT) {
+      task();
+    } else {
+      executionQueue.push(task);
+    }
+  });
+}
+
 // POST /api/submissions - submit code
 router.post('/', authenticate, async (req, res) => {
   const { problemId, assignmentId, language, code } = req.body;
@@ -52,8 +99,8 @@ router.post('/', authenticate, async (req, res) => {
       message: 'Submission received and running',
     });
 
-    // Execute in background
-    processSubmission(submission.id, code, language, testCases, problem).catch(console.error);
+    // Execute in background with queue to prevent overload
+    runWithQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
 
   } catch (err) {
     await client.query('ROLLBACK');
@@ -113,10 +160,22 @@ router.post('/run', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Code and language required' });
     }
 
-    const dockerAvailable = await isDockerAvailable();
-    const result = dockerAvailable
-      ? await executeCode(code, language, stdin)
-      : await executeCodeSimulated(code, language, stdin);
+    // Rate limit: 1 run per student per 5 seconds
+    if (isRateLimited(req.user.id)) {
+      const waitMs = RATE_LIMIT_MS - (Date.now() - (lastRunTime.get(req.user.id) || 0));
+      return res.status(429).json({
+        error: `Please wait ${Math.ceil(waitMs / 1000)} second(s) before running again.`
+      });
+    }
+    markRun(req.user.id);
+
+    // Queue execution to prevent server overload
+    const result = await runWithQueue(async () => {
+      const dockerAvailable = await isDockerAvailable();
+      return dockerAvailable
+        ? await executeCode(code, language, stdin)
+        : await executeCodeSimulated(code, language, stdin);
+    });
 
     res.json({
       stdout: result.stdout,
