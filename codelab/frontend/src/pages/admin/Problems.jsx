@@ -24,7 +24,7 @@ export default function AdminProblems() {
   const deleteProblem = async (id, title) => {
     if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
     try {
-      await api.delete(`/api/problems/${id}`);
+      await api.delete(`/problems/${id}`);
       toast.success('Problem deleted');
       load();
     } catch { toast.error('Failed to delete'); }

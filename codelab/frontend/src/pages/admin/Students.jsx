@@ -25,7 +25,7 @@ export default function AdminStudents() {
 
   const deleteStudent = async (id, name) => {
     if (!window.confirm(`Remove ${name}?`)) return;
-    await api.delete(`/api/users/${id}`);
+    await api.delete(`/users/${id}`);
     toast.success('Student removed');
     load();
   };

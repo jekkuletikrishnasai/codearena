@@ -29,7 +29,7 @@ export default function StudentSubmissions() {
   }, []);
 
   const viewDetail = async (id) => {
-    const res = await api.get(`/api/submissions/${id}`);
+    const res = await api.get(`/submissions/${id}`);
     setSelected(res.data.submission);
   };
 

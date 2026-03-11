@@ -23,7 +23,7 @@ export default function AdminProblemForm() {
 
   useEffect(() => {
     if (isEdit) {
-      api.get(`/api/problems/${id}`).then(res => {
+      api.get(`/problems/${id}`).then(res => {
         const p = res.data.problem;
         setForm({
           title: p.title, description: p.description,
@@ -69,7 +69,7 @@ export default function AdminProblemForm() {
     setLoading(true);
     try {
       if (isEdit) {
-        await api.put(`/api/problems/${id}`, form);
+        await api.put(`/problems/${id}`, form);
         toast.success('Problem updated');
       } else {
         await api.post('/api/problems', form);
