@@ -1,180 +1,376 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import api from '../../utils/api';
-import { RefreshCw, Eye, ChevronRight } from 'lucide-react';
+const express = require('express');
+const { query, getClient } = require('../db');
+const { authenticate, requireAdmin } = require('../middleware/auth');
+const { executeCode, executeCodeSimulated, isDockerAvailable } = require('../services/codeExecution');
 
-const StatusBadge = ({ status }) => {
-  const configs = {
-    accepted: { cls: 'bg-emerald-500/20 text-emerald-400', dot: 'bg-emerald-400' },
-    wrong_answer: { cls: 'bg-red-500/20 text-red-400', dot: 'bg-red-400' },
-    time_limit_exceeded: { cls: 'bg-yellow-500/20 text-yellow-400', dot: 'bg-yellow-400' },
-    runtime_error: { cls: 'bg-orange-500/20 text-orange-400', dot: 'bg-orange-400' },
-    compilation_error: { cls: 'bg-orange-500/20 text-orange-400', dot: 'bg-orange-400' },
-    running: { cls: 'bg-blue-500/20 text-blue-400', dot: 'bg-blue-400 animate-pulse' },
-    pending: { cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-400' },
-  };
-  const c = configs[status] || configs.pending;
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-mono ${c.cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`}></span>
-      {status?.replace(/_/g, ' ')}
-    </span>
-  );
-};
+const router = express.Router();
 
-export default function AdminSubmissions() {
-  const [submissions, setSubmissions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(null);
-  const [filter, setFilter] = useState('all');
+// ── Rate limiter: 1 execution per student every 5 seconds ─────────────────────
+const lastRunTime = new Map();
+const RATE_LIMIT_MS = 5000;
 
-  const load = () => {
-    setLoading(true);
-    api.get('/api/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
-
-  const viewSubmission = async (id) => {
-    const res = await api.get(`/api/submissions/${id}`);
-    setSelected(res.data.submission);
-  };
-
-  const filtered = filter === 'all' ? submissions : submissions.filter(s => s.status === filter);
-
-  return (
-    <div className="p-8 flex gap-6 h-full">
-      {/* Left: submissions list */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-white">Submissions</h1>
-            <p className="text-gray-400 mt-1">{submissions.length} total submissions</p>
-          </div>
-          <button onClick={load} className="flex items-center gap-2 text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 px-3 py-2 rounded-lg text-sm transition-colors">
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
-          </button>
-        </div>
-
-        {/* Status filter */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          {['all', 'accepted', 'wrong_answer', 'runtime_error', 'compilation_error', 'running', 'pending'].map(s => (
-            <button key={s} onClick={() => setFilter(s)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-mono capitalize transition-colors ${
-                filter === s ? 'bg-sky-500/20 text-sky-400 border border-sky-500/50' : 'bg-gray-800 text-gray-500 border border-gray-700 hover:border-gray-600'
-              }`}>{s.replace(/_/g, ' ')}</button>
-          ))}
-        </div>
-
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="divide-y divide-gray-800">
-            {filtered.length === 0 ? (
-              <div className="p-12 text-center text-gray-500">No submissions found</div>
-            ) : filtered.map(sub => (
-              <div key={sub.id}
-                onClick={() => viewSubmission(sub.id)}
-                className={`p-4 cursor-pointer transition-colors ${selected?.id === sub.id ? 'bg-sky-500/5 border-l-2 border-sky-500' : 'hover:bg-gray-800/50'}`}>
-                <div className="flex items-center gap-4">
-                  <div className="w-8 h-8 bg-gray-800 rounded-full flex items-center justify-center text-xs font-bold text-sky-400 flex-shrink-0">
-                    {sub.student_name?.[0]}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium text-white">{sub.student_name}</span>
-                      <span className="text-gray-600 text-xs">@{sub.username}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                      <span className="font-mono bg-gray-800 px-1.5 py-0.5 rounded">{sub.language}</span>
-                      <span>·</span>
-                      <span className="truncate">{sub.problem_title}</span>
-                      <span>·</span>
-                      <span>{new Date(sub.submitted_at).toLocaleString()}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <StatusBadge status={sub.status} />
-                    <span className="text-xs text-gray-500 font-mono">{sub.score}/{sub.max_score}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right: submission detail */}
-      {selected && (
-        <div className="w-96 flex-shrink-0">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl sticky top-0 overflow-hidden">
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Submission Detail</h3>
-                <p className="text-xs text-gray-500 font-mono mt-0.5">{selected.id?.slice(0, 8)}...</p>
-              </div>
-              <button onClick={() => setSelected(null)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
-            </div>
-            <div className="p-4 space-y-4 max-h-screen overflow-y-auto">
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <div className="text-gray-500 mb-0.5">Student</div>
-                  <div className="text-white font-medium">{selected.student_name}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <div className="text-gray-500 mb-0.5">Language</div>
-                  <div className="text-sky-400 font-mono">{selected.language}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <div className="text-gray-500 mb-0.5">Score</div>
-                  <div className="text-white font-mono">{selected.score}/{selected.max_score}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-3">
-                  <div className="text-gray-500 mb-0.5">Time</div>
-                  <div className="text-white font-mono">{selected.execution_time_ms || '-'}ms</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs text-gray-500 mb-2">Status</div>
-                <StatusBadge status={selected.status} />
-              </div>
-
-              {/* Code */}
-              <div>
-                <div className="text-xs text-gray-500 mb-2">Code</div>
-                <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
-                  {selected.code}
-                </pre>
-              </div>
-
-              {/* Test results */}
-              {selected.testCaseResults?.length > 0 && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">Test Cases ({selected.testCaseResults.length})</div>
-                  <div className="space-y-2">
-                    {selected.testCaseResults.map((r, i) => (
-                      <div key={i} className={`rounded-lg p-3 text-xs ${r.status === 'passed' ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
-                        <div className="flex justify-between mb-1">
-                          <span className={r.status === 'passed' ? 'text-emerald-400' : 'text-red-400'}>
-                            {r.is_hidden ? '🔒 Hidden' : `Test #${i + 1}`} — {r.status}
-                          </span>
-                          <span className="text-gray-500 font-mono">{r.execution_time_ms}ms</span>
-                        </div>
-                        {!r.is_hidden && r.status !== 'passed' && (
-                          <div className="font-mono text-gray-400 space-y-0.5">
-                            <div>Input: <span className="text-gray-300">{r.input?.substring(0, 40)}</span></div>
-                            <div>Expected: <span className="text-emerald-400">{r.expected_output?.substring(0, 40)}</span></div>
-                            <div>Got: <span className="text-red-400">{r.actual_output?.substring(0, 40)}</span></div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function isRateLimited(studentId) {
+  const last = lastRunTime.get(studentId) || 0;
+  return Date.now() - last < RATE_LIMIT_MS;
 }
+function markRun(studentId) {
+  lastRunTime.set(studentId, Date.now());
+  if (lastRunTime.size > 200) {
+    const cutoff = Date.now() - 60000;
+    for (const [k, v] of lastRunTime) {
+      if (v < cutoff) lastRunTime.delete(k);
+    }
+  }
+}
+
+// ── Execution queue: max 5 concurrent Java executions ─────────────────────────
+let activeExecutions = 0;
+const MAX_CONCURRENT = 5;
+const MAX_CONCURRENT_SUBMIT = 4;
+let activeSubmissions = 0;
+const submitQueue = [];
+const executionQueue = [];
+
+function runWithSubmitQueue(fn) {
+  return new Promise((resolve, reject) => {
+    const task = () => {
+      activeSubmissions++;
+      fn()
+        .then(resolve).catch(reject)
+        .finally(() => {
+          activeSubmissions--;
+          if (submitQueue.length > 0) submitQueue.shift()();
+        });
+    };
+    if (activeSubmissions < MAX_CONCURRENT_SUBMIT) task();
+    else submitQueue.push(task);
+  });
+}
+
+function runWithQueue(fn, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const timeoutHandle = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('Execution queue timeout — server too busy'));
+      }
+    }, timeoutMs);
+
+    const task = () => {
+      if (settled) {
+        activeExecutions--;
+        if (executionQueue.length > 0) executionQueue.shift()();
+        return;
+      }
+      activeExecutions++;
+      fn()
+        .then(r => { if (!settled) { settled = true; clearTimeout(timeoutHandle); resolve(r); } })
+        .catch(e => { if (!settled) { settled = true; clearTimeout(timeoutHandle); reject(e); } })
+        .finally(() => {
+          activeExecutions--;
+          if (executionQueue.length > 0) executionQueue.shift()();
+        });
+    };
+
+    if (activeExecutions < MAX_CONCURRENT) {
+      task();
+    } else {
+      executionQueue.push(task);
+    }
+  });
+}
+
+// POST /api/submissions - submit code
+router.post('/', authenticate, async (req, res) => {
+  const { problemId, assignmentId, language, code } = req.body;
+
+  if (!problemId || !language || !code) {
+    return res.status(400).json({ error: 'Problem ID, language, and code required' });
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const problemResult = await client.query(
+      'SELECT * FROM problems WHERE id = $1', [problemId]
+    );
+    if (problemResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Problem not found' });
+    }
+    const problem = problemResult.rows[0];
+
+    if (!problem.allowed_languages.includes(language)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Language ${language} not allowed for this problem` });
+    }
+
+    const testCasesResult = await client.query(
+      'SELECT * FROM test_cases WHERE problem_id = $1 ORDER BY order_index', [problemId]
+    );
+    const testCases = testCasesResult.rows;
+
+    const submissionResult = await client.query(`
+      INSERT INTO submissions (student_id, problem_id, assignment_id, language, code, status, max_score)
+      VALUES ($1, $2, $3, $4, $5, 'running', $6) RETURNING *
+    `, [req.user.id, problemId, assignmentId || null, language, code, testCases.length]);
+
+    const submission = submissionResult.rows[0];
+    await client.query('COMMIT');
+
+    res.status(202).json({
+      submission: { id: submission.id, status: 'running' },
+      message: 'Submission received and running',
+    });
+
+    runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Submit error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+async function processSubmission(submissionId, code, language, testCases, problem) {
+  const problemTimeLimitMs = problem.time_limit_ms || 5000;
+
+  const LANGUAGE_WALL_TIME_BUFFER = {
+    java:       25000,
+    cpp:        10000,
+    c:          10000,
+    python:     5000,
+    javascript: 5000,
+  };
+  const wallTimeMs = problemTimeLimitMs + (LANGUAGE_WALL_TIME_BUFFER[language] || 8000);
+
+  const results = [];
+  for (const tc of testCases) {
+    const result = await runWithQueue(() =>
+      executeCode(code, language, tc.input, wallTimeMs)
+    ).catch(err => ({
+      stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
+    }));
+
+    const actual   = result.stdout.trim();
+    const expected = tc.expected_output.trim();
+
+    const isCompileError = result.exitCode !== 0 && (
+      result.stderr.includes('error: compilation failed') ||
+      result.stderr.includes('javac') ||
+      result.stderr.includes(': error:') ||
+      result.stderr.includes('SyntaxError') ||
+      result.stderr.includes('error: expected') ||
+      result.stderr.includes('compilation failed')
+    );
+
+    const exceededTimeLimit = result.timedOut || result.executionTimeMs > problemTimeLimitMs;
+
+    let status;
+    if (exceededTimeLimit)          status = 'time_limit_exceeded';
+    else if (isCompileError)        status = 'compilation_error';
+    else if (result.exitCode !== 0) status = 'runtime_error';
+    else if (actual === expected)   status = 'passed';
+    else                            status = 'failed';
+
+    results.push({
+      testCaseId: tc.id, status,
+      actualOutput: result.stdout,
+      errorOutput:  result.stderr,
+      executionTimeMs: result.executionTimeMs,
+      expected, isHidden: tc.is_hidden,
+    });
+
+    if (status === 'compilation_error') {
+      for (const remaining of testCases.slice(results.length)) {
+        results.push({
+          testCaseId: remaining.id, status: 'compilation_error',
+          actualOutput: '', errorOutput: result.stderr, executionTimeMs: 0,
+          expected: remaining.expected_output, isHidden: remaining.is_hidden,
+        });
+      }
+      break;
+    }
+  }
+
+  const client = await getClient();
+  try {
+    const passed = results.filter(r => r.status === 'passed').length;
+
+    let overallStatus = 'accepted';
+    if (results.some(r => r.status === 'compilation_error'))        overallStatus = 'compilation_error';
+    else if (results.some(r => r.status === 'time_limit_exceeded')) overallStatus = 'time_limit_exceeded';
+    else if (results.some(r => r.status === 'runtime_error'))       overallStatus = 'runtime_error';
+    else if (results.some(r => r.status === 'failed'))              overallStatus = 'wrong_answer';
+
+    const avgTime = results.reduce((sum, r) => sum + (r.executionTimeMs || 0), 0) / (results.length || 1);
+
+    await client.query('BEGIN');
+
+    await client.query(`
+      UPDATE submissions SET status=$1, score=$2, execution_time_ms=$3, submitted_at=NOW()
+      WHERE id=$4
+    `, [overallStatus, passed, Math.round(avgTime), submissionId]);
+
+    for (const result of results) {
+      await client.query(`
+        INSERT INTO test_case_results (submission_id, test_case_id, status, actual_output, execution_time_ms)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT DO NOTHING
+      `, [submissionId, result.testCaseId, result.status,
+          (result.actualOutput || result.errorOutput || '').substring(0, 10000),
+          result.executionTimeMs]);
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    await query(`UPDATE submissions SET status='runtime_error' WHERE id=$1`, [submissionId]);
+    console.error('Process submission DB error:', err);
+  } finally {
+    client.release();
+  }
+}
+
+// POST /api/submissions/run - run code without submitting
+router.post('/run', authenticate, async (req, res) => {
+  try {
+    const { code, language, stdin = '' } = req.body;
+    if (!code || !language) {
+      return res.status(400).json({ error: 'Code and language required' });
+    }
+
+    if (isRateLimited(req.user.id)) {
+      const waitMs = RATE_LIMIT_MS - (Date.now() - (lastRunTime.get(req.user.id) || 0));
+      return res.status(429).json({
+        error: `Please wait ${Math.ceil(waitMs / 1000)} second(s) before running again.`
+      });
+    }
+    markRun(req.user.id);
+
+    const result = await runWithQueue(async () => {
+      const dockerAvailable = await isDockerAvailable();
+      return dockerAvailable
+        ? await executeCode(code, language, stdin)
+        : await executeCodeSimulated(code, language, stdin);
+    });
+
+    res.json({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      executionTimeMs: result.executionTimeMs,
+      simulated: result.simulated || false,
+    });
+  } catch (err) {
+    console.error('Run code error:', err);
+    res.status(500).json({ error: 'Code execution failed', details: err.message });
+  }
+});
+
+// GET /api/submissions - list submissions
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const { problemId, studentId, assignmentId } = req.query;
+    let whereClause = '';
+    const params = [];
+    const conditions = [];
+
+    if (req.user.role === 'student') {
+      conditions.push(`s.student_id = $${params.length + 1}`);
+      params.push(req.user.id);
+    } else if (studentId) {
+      conditions.push(`s.student_id = $${params.length + 1}`);
+      params.push(studentId);
+    }
+
+    if (problemId) {
+      conditions.push(`s.problem_id = $${params.length + 1}`);
+      params.push(problemId);
+    }
+
+    if (assignmentId) {
+      conditions.push(`s.assignment_id = $${params.length + 1}`);
+      params.push(assignmentId);
+    }
+
+    if (conditions.length > 0) {
+      whereClause = 'WHERE ' + conditions.join(' AND ');
+    }
+
+    const result = await query(`
+      SELECT s.*, p.title as problem_title, u.full_name as student_name, u.username
+      FROM submissions s
+      JOIN problems p ON s.problem_id = p.id
+      JOIN users u ON s.student_id = u.id
+      ${whereClause}
+      ORDER BY s.submitted_at DESC
+      LIMIT 100
+    `, params);
+
+    res.json({ submissions: result.rows });
+  } catch (err) {
+    console.error('Get submissions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/submissions/:id - get submission details
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT s.*, p.title as problem_title, u.full_name as student_name
+      FROM submissions s
+      JOIN problems p ON s.problem_id = p.id
+      JOIN users u ON s.student_id = u.id
+      WHERE s.id = $1 ${req.user.role === 'student' ? 'AND s.student_id = $2' : ''}
+    `, req.user.role === 'student' ? [req.params.id, req.user.id] : [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const submission = result.rows[0];
+
+    const tcResults = await query(`
+      SELECT tcr.*, tc.input, tc.expected_output, tc.is_hidden, tc.points
+      FROM test_case_results tcr
+      JOIN test_cases tc ON tcr.test_case_id = tc.id
+      WHERE tcr.submission_id = $1
+      ORDER BY tc.order_index
+    `, [req.params.id]);
+
+    const filteredResults = tcResults.rows.map(r => {
+      if (req.user.role === 'student' && r.is_hidden) {
+        return { ...r, input: '[hidden]', expected_output: '[hidden]', actual_output: '[hidden]' };
+      }
+      return r;
+    });
+
+    submission.testCaseResults = filteredResults;
+    res.json({ submission });
+  } catch (err) {
+    console.error('Get submission error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/submissions/:id — admin only, single delete
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    await query('DELETE FROM test_case_results WHERE submission_id = $1', [req.params.id]);
+    const result = await query('DELETE FROM submissions WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Submission not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete submission error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router;

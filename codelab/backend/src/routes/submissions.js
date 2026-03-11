@@ -60,7 +60,6 @@ function runWithQueue(fn, timeoutMs = 120000) {
 
     const task = () => {
       if (settled) {
-        // Already timed out while waiting in queue — skip and free slot
         activeExecutions--;
         if (executionQueue.length > 0) executionQueue.shift()();
         return;
@@ -139,15 +138,11 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 async function processSubmission(submissionId, code, language, testCases, problem) {
-  // ── PHASE 1: Execute code — NO DB client held during this slow phase ──────
   const problemTimeLimitMs = problem.time_limit_ms || 5000;
 
-  // Give Java/C++ extra wall time for JVM startup + compilation under load.
-  // The problem's time_limit_ms is enforced via executionTimeMs check below,
-  // NOT by killing the process early (which causes false time_limit_exceeded).
   const LANGUAGE_WALL_TIME_BUFFER = {
-    java:       25000,  // JVM cold start can take 10-20s
-    cpp:        10000,  // g++ compilation
+    java:       25000,
+    cpp:        10000,
     c:          10000,
     python:     5000,
     javascript: 5000,
@@ -174,8 +169,6 @@ async function processSubmission(submissionId, code, language, testCases, proble
       result.stderr.includes('compilation failed')
     );
 
-    // Check time limit using actual execution time, not just OS kill signal.
-    // This correctly handles cases where the process ran but was too slow.
     const exceededTimeLimit = result.timedOut || result.executionTimeMs > problemTimeLimitMs;
 
     let status;
@@ -193,7 +186,6 @@ async function processSubmission(submissionId, code, language, testCases, proble
       expected, isHidden: tc.is_hidden,
     });
 
-    // Early exit on compilation error — skip remaining test cases
     if (status === 'compilation_error') {
       for (const remaining of testCases.slice(results.length)) {
         results.push({
@@ -206,7 +198,6 @@ async function processSubmission(submissionId, code, language, testCases, proble
     }
   }
 
-  // ── PHASE 2: Write results to DB ──────────────────────────────────────────
   const client = await getClient();
   try {
     const passed = results.filter(r => r.status === 'passed').length;
@@ -365,6 +356,19 @@ router.get('/:id', authenticate, async (req, res) => {
     res.json({ submission });
   } catch (err) {
     console.error('Get submission error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/submissions/:id — admin only, single delete
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    await query('DELETE FROM test_case_results WHERE submission_id = $1', [req.params.id]);
+    const result = await query('DELETE FROM submissions WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Submission not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete submission error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
