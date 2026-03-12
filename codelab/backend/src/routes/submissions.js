@@ -25,8 +25,8 @@ function markRun(studentId) {
 
 // ── Execution queue: max 5 concurrent Java executions ─────────────────────────
 let activeExecutions = 0;
-const MAX_CONCURRENT = 5;
-const MAX_CONCURRENT_SUBMIT = 4;
+const MAX_CONCURRENT = 8;
+const MAX_CONCURRENT_SUBMIT = 6;
 let activeSubmissions = 0;
 const submitQueue = [];
 const executionQueue = [];
