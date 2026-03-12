@@ -380,9 +380,9 @@ export default function StudentProblem() {
                           </div>
                           {!r.is_hidden && r.status !== 'passed' && (
                             <div className="text-xs font-mono space-y-1">
-                              <div><span className="text-gray-500">Input: </span><span className="text-gray-300">{r.input?.substring(0, 60)}</span></div>
-                              <div><span className="text-gray-500">Expected: </span><span className="text-emerald-400">{r.expected_output?.substring(0, 60)}</span></div>
-                              <div><span className="text-gray-500">Got: </span><span className="text-red-400">{r.actual_output?.substring(0, 60)}</span></div>
+                              <div><span className="text-gray-500">Input: </span><pre className="inline whitespace-pre-wrap text-gray-300">{r.input?.substring(0, 200)}</pre></div>
+                              <div><span className="text-gray-500">Expected: </span><pre className="inline whitespace-pre-wrap text-emerald-400">{r.expected_output?.substring(0, 200)}</pre></div>
+                              <div><span className="text-gray-500">Got: </span><pre className="inline whitespace-pre-wrap text-red-400">{r.actual_output?.substring(0, 200)}</pre></div>
                             </div>
                           )}
                         </div>
