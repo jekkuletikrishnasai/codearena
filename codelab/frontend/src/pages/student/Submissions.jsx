@@ -23,14 +23,23 @@ export default function StudentSubmissions() {
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     api.get('/api/submissions').then(res => setSubmissions(res.data.submissions)).finally(() => setLoading(false));
   }, []);
 
   const viewDetail = async (id) => {
-    const res = await api.get(`/submissions/${id}`);
-    setSelected(res.data.submission);
+    if (selected?.id === id) { setSelected(null); return; }
+    setDetailLoading(true);
+    try {
+      const res = await api.get(`/api/submissions/${id}`);
+      setSelected(res.data.submission);
+    } catch (e) {
+      console.error('Failed to load submission detail', e);
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   return (
@@ -60,7 +69,7 @@ export default function StudentSubmissions() {
                   </td></tr>
                 ) : submissions.map(s => (
                   <tr key={s.id} onClick={() => viewDetail(s.id)}
-                    className={`cursor-pointer transition-colors ${selected?.id === s.id ? 'bg-sky-500/5' : 'hover:bg-gray-800/50'}`}>
+                    className={`cursor-pointer transition-colors ${selected?.id === s.id ? 'bg-sky-500/5 border-l-2 border-sky-500' : 'hover:bg-gray-800/50'}`}>
                     <td className="px-5 py-3">
                       <Link to={`/student/problems/${s.problem_id}`} onClick={e => e.stopPropagation()}
                         className="text-sm font-medium text-white hover:text-sky-400 transition-colors">
@@ -80,34 +89,85 @@ export default function StudentSubmissions() {
         )}
       </div>
 
-      {selected && (
-        <div className="w-80 flex-shrink-0">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl sticky top-0 overflow-hidden">
+      {/* Detail Panel */}
+      {(selected || detailLoading) && (
+        <div className="w-96 flex-shrink-0">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl sticky top-6 overflow-hidden">
             <div className="p-4 border-b border-gray-800 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-white">Submission Detail</h3>
               <button onClick={() => setSelected(null)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">×</button>
             </div>
-            <div className="p-4 space-y-4 max-h-screen overflow-y-auto">
-              <StatusBadge status={selected.status} />
-              <div className="text-xs text-gray-500 font-mono">{selected.score}/{selected.max_score} test cases passed</div>
-              <div>
-                <div className="text-xs text-gray-500 mb-1.5">Your Code</div>
-                <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap">{selected.code}</pre>
-              </div>
-              {selected.testCaseResults?.length > 0 && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">Test Results</div>
-                  <div className="space-y-1.5">
-                    {selected.testCaseResults.map((r, i) => (
-                      <div key={i} className={`flex items-center justify-between text-xs p-2 rounded-lg ${r.status === 'passed' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                        <span>{r.is_hidden ? '🔒 Hidden' : `Test #${i + 1}`}</span>
-                        <span className="capitalize font-mono">{r.status}</span>
-                      </div>
-                    ))}
-                  </div>
+
+            {detailLoading ? (
+              <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div>
+            ) : selected && (
+              <div className="p-4 space-y-4 max-h-[85vh] overflow-y-auto">
+
+                {/* Status + Score */}
+                <div className="flex items-center gap-3">
+                  <StatusBadge status={selected.status} />
+                  <span className="text-xs text-gray-500 font-mono">{selected.score}/{selected.max_score} passed</span>
+                  {selected.execution_time_ms && <span className="text-xs text-gray-500 font-mono">{selected.execution_time_ms}ms</span>}
                 </div>
-              )}
-            </div>
+
+                {/* Problem + Language */}
+                <div className="text-xs text-gray-500">
+                  <span className="text-gray-300 font-medium">{selected.problem_title}</span>
+                  <span className="mx-2">·</span>
+                  <span className="font-mono bg-gray-800 px-2 py-0.5 rounded text-gray-400">{selected.language}</span>
+                </div>
+
+                {/* Your Code */}
+                <div>
+                  <div className="text-xs text-gray-500 mb-1.5 font-semibold uppercase tracking-wider">Your Code</div>
+                  <pre className="bg-gray-800 rounded-lg p-3 text-xs font-mono text-gray-300 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap border border-gray-700">{selected.code}</pre>
+                </div>
+
+                {/* Test Results */}
+                {selected.testCaseResults?.length > 0 && (
+                  <div>
+                    <div className="text-xs text-gray-500 mb-2 font-semibold uppercase tracking-wider">Test Results</div>
+                    <div className="space-y-2">
+                      {selected.testCaseResults.map((r, i) => (
+                        <div key={i} className={`rounded-lg border text-xs ${r.status === 'passed' ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+                          <div className="flex items-center justify-between px-3 py-2">
+                            <span className={r.status === 'passed' ? 'text-emerald-400' : 'text-red-400'}>
+                              {r.is_hidden ? '🔒 Hidden Test' : `Test Case #${i + 1}`}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              {r.execution_time_ms && <span className="text-gray-500 font-mono">{r.execution_time_ms}ms</span>}
+                              <span className={`capitalize font-mono font-semibold ${r.status === 'passed' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {r.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Show details only for non-hidden, non-passed tests */}
+                          {!r.is_hidden && r.status !== 'passed' && (
+                            <div className="px-3 pb-3 space-y-1.5 border-t border-gray-700 pt-2 font-mono">
+                              {r.input && (
+                                <div>
+                                  <span className="text-gray-500">Input: </span>
+                                  <pre className="inline whitespace-pre-wrap text-gray-300">{r.input}</pre>
+                                </div>
+                              )}
+                              <div>
+                                <span className="text-gray-500">Expected: </span>
+                                <pre className="inline whitespace-pre-wrap text-emerald-400">{r.expected_output}</pre>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Got: </span>
+                                <pre className="inline whitespace-pre-wrap text-red-400">{r.actual_output || '(no output)'}</pre>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
