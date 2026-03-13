@@ -42,6 +42,7 @@ export default function StudentProblem() {
   const [output, setOutput]                 = useState(null);
   const [submitting, setSubmitting]         = useState(false);
   const [running, setRunning]               = useState(false);
+  const [submitElapsed, setSubmitElapsed]   = useState(0);   // seconds since submit started
   const [runElapsed, setRunElapsed]         = useState(0);   // seconds since run started
   const [runStatusMsg, setRunStatusMsg]     = useState('');  // text shown in output panel
   const [submissionId, setSubmissionId]     = useState(null);
@@ -49,6 +50,7 @@ export default function StudentProblem() {
   const [polling, setPolling]               = useState(false);
   const [activeTab, setActiveTab]           = useState('description');
   const timerRef                            = useRef(null);
+  const submitTimerRef                      = useRef(null);
 
   useEffect(() => {
     api.get(`/api/problems/${id}`).then(res => {
@@ -107,7 +109,15 @@ export default function StudentProblem() {
   const submitCode = async () => {
     if (submitting || polling) return; // hard guard — ignore extra clicks
     setSubmitting(true);
+    setSubmitElapsed(0);
     setSubmissionResult(null);
+
+    // Start submit elapsed timer so student sees progress
+    const submitStart = Date.now();
+    submitTimerRef.current = setInterval(() => {
+      setSubmitElapsed(Math.floor((Date.now() - submitStart) / 1000));
+    }, 500);
+
     try {
       const res = await api.post('/api/submissions', { problemId: id, language, code });
       const sid = res.data.submission.id;
@@ -116,6 +126,8 @@ export default function StudentProblem() {
       toast.success('Submitted! Running test cases…');
       pollResult(sid);
     } catch (err) {
+      clearInterval(submitTimerRef.current);
+      setSubmitElapsed(0);
       toast.error('Submission failed. Please try again.');
       setSubmitting(false);
     }
@@ -124,36 +136,61 @@ export default function StudentProblem() {
   const pollResult = useCallback(async (sid) => {
     setPolling(true);
     let attempts = 0;
-    const MAX_ATTEMPTS = 150; // 150 × 800ms = 2 minutes max
-    const interval = setInterval(async () => {
+    const MAX_ATTEMPTS = 180; // 180 attempts at up to 2s each = 6 min max
+
+    // Use lightweight /status endpoint while running — only fetch full details once done
+    const poll = async () => {
       attempts++;
       try {
-        const res = await api.get(`/api/submissions/${sid}`);
-        const sub = res.data.submission;
-        if (sub.status !== 'running' && sub.status !== 'pending') {
-          setSubmissionResult(sub);
+        const res = await api.get(`/api/submissions/${sid}/status`);
+        const { status, score, max_score, execution_time_ms } = res.data;
+
+        if (status !== 'running' && status !== 'pending') {
+          // Done — now fetch full result with test case details (one time only)
+          try {
+            const fullRes = await api.get(`/api/submissions/${sid}`);
+            setSubmissionResult(fullRes.data.submission);
+          } catch {
+            // Fallback: show status even if full fetch fails
+            setSubmissionResult({ status, score, max_score, execution_time_ms, testCaseResults: [] });
+          }
+          clearInterval(submitTimerRef.current);
+          setSubmitElapsed(0);
           setPolling(false);
           setSubmitting(false);
-          clearInterval(interval);
-          if (sub.status === 'accepted') toast.success('All test cases passed! 🎉');
-          else if (sub.status === 'wrong_answer') toast.error('Wrong answer — check your logic');
-          else if (sub.status === 'time_limit_exceeded') toast.error('Time limit exceeded');
-          else if (sub.status === 'compilation_error') toast.error('Compilation error in your code');
-          else if (sub.status === 'runtime_error') toast.error('Runtime error — check your code');
-          else toast.error(`Result: ${sub.status.replace(/_/g, ' ')}`);
+          if (status === 'accepted')            toast.success('All test cases passed! 🎉');
+          else if (status === 'wrong_answer')   toast.error('Wrong answer — check your logic');
+          else if (status === 'time_limit_exceeded') toast.error('Time limit exceeded');
+          else if (status === 'compilation_error')   toast.error('Compilation error in your code');
+          else if (status === 'runtime_error')       toast.error('Runtime error — check your code');
+          else toast.error(`Result: ${status.replace(/_/g, ' ')}`);
+          return;
         }
       } catch {}
+
       if (attempts >= MAX_ATTEMPTS) {
-        clearInterval(interval);
+        clearInterval(submitTimerRef.current);
+        setSubmitElapsed(0);
         setPolling(false);
         setSubmitting(false);
         toast.error('Result is taking too long — check My Submissions page for your result.');
+        return;
       }
-    }, 800); // poll every 800ms instead of 1500ms
+
+      // Smart backoff: fast at first (1s), then slower (2s) to reduce DB load
+      const delay = attempts < 20 ? 1000 : 2000;
+      setTimeout(poll, delay);
+    };
+
+    // Start first poll after 2s (give server time to start processing)
+    setTimeout(poll, 2000);
   }, []);
 
-  // Cleanup timer on unmount
-  useEffect(() => () => clearInterval(timerRef.current), []);
+  // Cleanup timers on unmount
+  useEffect(() => () => {
+    clearInterval(timerRef.current);
+    clearInterval(submitTimerRef.current);
+  }, []);
 
   if (!problem) return (
     <div className="flex justify-center items-center h-full p-8">
@@ -276,14 +313,18 @@ export default function StudentProblem() {
         </button>
 
         <button onClick={submitCode} disabled={submitting || polling}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all min-w-[110px] justify-center
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all min-w-[130px] justify-center
             ${(submitting || polling)
               ? 'bg-sky-900/60 text-sky-300 border border-sky-700/50 cursor-not-allowed'
               : 'bg-sky-500 hover:bg-sky-400 text-white'
             }`}>
-          {polling ? <><Loader size={14} className="animate-spin" /><span>Checking…</span></> :
-           submitting ? <><Loader size={14} className="animate-spin" /><span>Submitting…</span></> :
-           <><Send size={14} /><span>Submit</span></>}
+          {polling ? (
+            <><Loader size={14} className="animate-spin" /><span>Checking… {submitElapsed > 0 ? `${submitElapsed}s` : ''}</span></>
+          ) : submitting ? (
+            <><Loader size={14} className="animate-spin" /><span>Submitting… {submitElapsed > 0 ? `${submitElapsed}s` : ''}</span></>
+          ) : (
+            <><Send size={14} /><span>Submit</span></>
+          )}
         </button>
       </div>
 
@@ -349,8 +390,11 @@ export default function StudentProblem() {
                   <div className="text-center py-12">
                     <Loader size={32} className="mx-auto mb-3 text-sky-400 animate-spin" />
                     <p className="text-gray-400 font-medium">Running test cases…</p>
-                    <p className="text-gray-600 text-xs mt-2">Java needs ~8-15s to start. Please wait.</p>
-                    <p className="text-sky-700 text-xs mt-1">Do not click Submit again ✋</p>
+                    {submitElapsed > 0 && (
+                      <p className="text-sky-400 font-mono text-lg mt-2">{submitElapsed}s elapsed</p>
+                    )}
+                    <p className="text-gray-600 text-xs mt-2">Java needs ~15-35s. Please wait.</p>
+                    <p className="text-sky-700 text-xs mt-1 font-semibold">✋ Do not click Submit again — it's running!</p>
                   </div>
                 ) : (
                   <div>

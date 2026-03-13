@@ -124,40 +124,32 @@ router.post('/', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'Problem ID, language, and code required' });
   }
 
-  const client = await getClient();
   try {
-    await client.query('BEGIN');
-
-    // Get problem with test cases
-    const problemResult = await client.query(
-      'SELECT * FROM problems WHERE id = $1', [problemId]
-    );
+    // ── Use pooled query() (not getClient) so we don't hold a connection ──
+    const problemResult = await query('SELECT * FROM problems WHERE id = $1', [problemId]);
     if (problemResult.rows.length === 0) {
-      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Problem not found' });
     }
     const problem = problemResult.rows[0];
 
     if (!problem.allowed_languages.includes(language)) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ error: `Language ${language} not allowed for this problem` });
     }
 
-    const testCasesResult = await client.query(
+    const testCasesResult = await query(
       'SELECT * FROM test_cases WHERE problem_id = $1 ORDER BY order_index', [problemId]
     );
     const testCases = testCasesResult.rows;
 
-    // Create submission record
-    const submissionResult = await client.query(`
+    // Create submission record — brief single INSERT, no transaction needed
+    const submissionResult = await query(`
       INSERT INTO submissions (student_id, problem_id, assignment_id, language, code, status, max_score)
-      VALUES ($1, $2, $3, $4, $5, 'running', $6) RETURNING *
+      VALUES ($1, $2, $3, $4, $5, 'running', $6) RETURNING id, status
     `, [req.user.id, problemId, assignmentId || null, language, code, testCases.length]);
 
     const submission = submissionResult.rows[0];
-    await client.query('COMMIT');
 
-    // Run test cases (async - respond immediately)
+    // Respond immediately — client starts polling
     res.status(202).json({
       submission: { id: submission.id, status: 'running' },
       message: 'Submission received and running',
@@ -167,25 +159,29 @@ router.post('/', authenticate, async (req, res) => {
     runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
 
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Submit error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 async function processSubmission(submissionId, code, language, testCases, problem) {
-  // ── PHASE 1: Execute code — NO DB client held during this slow phase ──────
-  // We only grab a DB connection AFTER all execution is done (in Phase 2).
-  // This prevents 20 submissions from holding 20 DB connections simultaneously
-  // while waiting for Java to compile/run (which takes 5-40 seconds each).
-  const results = [];
-  for (const tc of testCases) {
-    const result = await runWithQueue(() =>
-      executeCode(code, language, tc.input, getWallTime(language, problem.time_limit_ms || 10000))
-    ).catch(err => ({
-      stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
-    }));
+  // ── PHASE 1: Execute ALL test cases in PARALLEL — no DB client held ───────
+  // Running in parallel: 3 Java test cases now take ~35s total instead of ~105s.
+  // Each gets its own queue slot — queue handles backpressure automatically.
+  const wallTime = getWallTime(language, problem.time_limit_ms || 10000);
 
+  const rawResults = await Promise.all(
+    testCases.map(tc =>
+      runWithQueue(() =>
+        executeCode(code, language, tc.input, wallTime)
+      ).catch(err => ({
+        stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
+      }))
+    )
+  );
+
+  const results = rawResults.map((result, i) => {
+    const tc       = testCases[i];
     const actual   = result.stdout.trim();
     const expected = tc.expected_output.trim();
     const isCompileError = result.exitCode !== 0 && (
@@ -203,26 +199,14 @@ async function processSubmission(submissionId, code, language, testCases, proble
     else if (actual === expected)   status = 'passed';
     else                            status = 'failed';
 
-    results.push({
+    return {
       testCaseId: tc.id, status,
       actualOutput: result.stdout,
       errorOutput:  result.stderr,
       executionTimeMs: result.executionTimeMs,
       expected, isHidden: tc.is_hidden,
-    });
-
-    // Early exit on compilation error — skip remaining test cases
-    if (status === 'compilation_error') {
-      for (const remaining of testCases.slice(results.length)) {
-        results.push({
-          testCaseId: remaining.id, status: 'compilation_error',
-          actualOutput: '', errorOutput: result.stderr, executionTimeMs: 0,
-          expected: remaining.expected_output, isHidden: remaining.is_hidden,
-        });
-      }
-      break;
-    }
-  }
+    };
+  });
 
   // ── PHASE 2: Write results to DB (grab client only NOW, briefly) ──────────
   const client = await getClient();
@@ -300,6 +284,24 @@ router.post('/run', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Run code error:', err);
     res.status(500).json({ error: 'Code execution failed', details: err.message });
+  }
+});
+
+// GET /api/submissions/:id/status — LIGHTWEIGHT polling endpoint
+// Only returns status field — no JOINs, no test case data.
+// Frontend polls this while waiting, then fetches full details only once done.
+router.get('/:id/status', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, status, score, max_score, execution_time_ms
+       FROM submissions
+       WHERE id = $1 ${req.user.role === 'student' ? 'AND student_id = $2' : ''}`,
+      req.user.role === 'student' ? [req.params.id, req.user.id] : [req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
