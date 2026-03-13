@@ -36,27 +36,53 @@ function getWallTime(language, problemTimeLimitMs) {
 
 // ── Execution queues: separate queues for Run vs Submit ───────────────────────
 let activeExecutions = 0;
-const MAX_CONCURRENT = 6;        // Max concurrent submission executions
-const MAX_CONCURRENT_SUBMIT = 5; // Max submissions in flight simultaneously
-const MAX_CONCURRENT_RUN = 5;    // Run slots — increased since /run is now fast with javac
+const MAX_CONCURRENT = 6;
+const MAX_CONCURRENT_SUBMIT = 5;
+const MAX_CONCURRENT_RUN = 5;
 let activeRunExecutions = 0;
 let activeSubmissions = 0;
 const submitQueue = [];
 const runExecutionQueue = [];
 
-function runWithSubmitQueue(fn) {
+// Queue position tracking: submissionId → queue position (1-based, 0 = running)
+const submissionQueuePos = new Map();
+
+function getQueueInfo() {
+  return {
+    activeSubmissions,
+    queueLength: submitQueue.length,
+    maxSlots: MAX_CONCURRENT_SUBMIT,
+    // Estimated seconds per submission slot (Java compile+run ~8s average)
+    avgSecondsPerSlot: 8,
+  };
+}
+
+function runWithSubmitQueue(fn, submissionId) {
   return new Promise((resolve, reject) => {
     const task = () => {
       activeSubmissions++;
+      // Now running — position 0 means "your code is executing"
+      if (submissionId) submissionQueuePos.set(submissionId, 0);
       fn()
         .then(resolve).catch(reject)
         .finally(() => {
           activeSubmissions--;
+          if (submissionId) submissionQueuePos.delete(submissionId);
           if (submitQueue.length > 0) submitQueue.shift()();
         });
     };
-    if (activeSubmissions < MAX_CONCURRENT_SUBMIT) task();
-    else submitQueue.push(task);
+    if (activeSubmissions < MAX_CONCURRENT_SUBMIT) {
+      task();
+    } else {
+      // Track queue position (queue length before adding = position)
+      const pos = submitQueue.length + 1;
+      if (submissionId) submissionQueuePos.set(submissionId, pos);
+      submitQueue.push(() => {
+        // Update position to 0 (now running) when dequeued
+        if (submissionId) submissionQueuePos.set(submissionId, 0);
+        task();
+      });
+    }
   });
 }
 const executionQueue = [];
@@ -158,7 +184,7 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     // Execute in background with queue to prevent overload
-    runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
+    runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem), submission.id).catch(console.error);
 
   } catch (err) {
     console.error('Submit error:', err);
@@ -307,7 +333,27 @@ router.get('/:id/status', authenticate, async (req, res) => {
       req.user.role === 'student' ? [req.params.id, req.user.id] : [req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json(result.rows[0]);
+
+    const row = result.rows[0];
+    const queueInfo = getQueueInfo();
+
+    // queuePosition: null = done/not in queue, 0 = currently executing, N = Nth in queue
+    const queuePosition = submissionQueuePos.has(req.params.id)
+      ? submissionQueuePos.get(req.params.id)
+      : (row.status === 'running' ? 0 : null);
+
+    // Estimated wait: position × avg seconds per slot
+    const estimatedWaitSec = queuePosition > 0
+      ? queuePosition * queueInfo.avgSecondsPerSlot
+      : 0;
+
+    res.json({
+      ...row,
+      queuePosition,
+      estimatedWaitSec,
+      activeSubmissions: queueInfo.activeSubmissions,
+      queueLength: queueInfo.queueLength,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }

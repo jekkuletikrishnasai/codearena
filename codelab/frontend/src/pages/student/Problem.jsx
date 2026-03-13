@@ -42,12 +42,13 @@ export default function StudentProblem() {
   const [output, setOutput]                 = useState(null);
   const [submitting, setSubmitting]         = useState(false);
   const [running, setRunning]               = useState(false);
-  const [submitElapsed, setSubmitElapsed]   = useState(0);   // seconds since submit started
-  const [runElapsed, setRunElapsed]         = useState(0);   // seconds since run started
-  const [runStatusMsg, setRunStatusMsg]     = useState('');  // text shown in output panel
+  const [submitElapsed, setSubmitElapsed]   = useState(0);
+  const [runElapsed, setRunElapsed]         = useState(0);
+  const [runStatusMsg, setRunStatusMsg]     = useState('');
   const [submissionId, setSubmissionId]     = useState(null);
   const [submissionResult, setSubmissionResult] = useState(null);
   const [polling, setPolling]               = useState(false);
+  const [queueInfo, setQueueInfo]           = useState(null); // { queuePosition, estimatedWaitSec, activeSubmissions, queueLength }
   const [activeTab, setActiveTab]           = useState('description');
   const timerRef                            = useRef(null);
   const submitTimerRef                      = useRef(null);
@@ -135,31 +136,35 @@ export default function StudentProblem() {
 
   const pollResult = useCallback(async (sid) => {
     setPolling(true);
+    setQueueInfo(null);
     let attempts = 0;
-    const MAX_ATTEMPTS = 180; // 180 attempts at up to 2s each = 6 min max
+    const MAX_ATTEMPTS = 180;
 
-    // Use lightweight /status endpoint while running — only fetch full details once done
     const poll = async () => {
       attempts++;
       try {
         const res = await api.get(`/api/submissions/${sid}/status`);
-        const { status, score, max_score, execution_time_ms } = res.data;
+        const { status, score, max_score, execution_time_ms, queuePosition, estimatedWaitSec, activeSubmissions, queueLength } = res.data;
+
+        // Always update queue info while running
+        if (status === 'running' || status === 'pending') {
+          setQueueInfo({ queuePosition, estimatedWaitSec, activeSubmissions, queueLength });
+        }
 
         if (status !== 'running' && status !== 'pending') {
-          // Done — now fetch full result with test case details (one time only)
           try {
             const fullRes = await api.get(`/api/submissions/${sid}`);
             setSubmissionResult(fullRes.data.submission);
           } catch {
-            // Fallback: show status even if full fetch fails
             setSubmissionResult({ status, score, max_score, execution_time_ms, testCaseResults: [] });
           }
           clearInterval(submitTimerRef.current);
           setSubmitElapsed(0);
+          setQueueInfo(null);
           setPolling(false);
           setSubmitting(false);
-          if (status === 'accepted')            toast.success('All test cases passed! 🎉');
-          else if (status === 'wrong_answer')   toast.error('Wrong answer — check your logic');
+          if (status === 'accepted')              toast.success('All test cases passed! 🎉');
+          else if (status === 'wrong_answer')     toast.error('Wrong answer — check your logic');
           else if (status === 'time_limit_exceeded') toast.error('Time limit exceeded');
           else if (status === 'compilation_error')   toast.error('Compilation error in your code');
           else if (status === 'runtime_error')       toast.error('Runtime error — check your code');
@@ -171,18 +176,17 @@ export default function StudentProblem() {
       if (attempts >= MAX_ATTEMPTS) {
         clearInterval(submitTimerRef.current);
         setSubmitElapsed(0);
+        setQueueInfo(null);
         setPolling(false);
         setSubmitting(false);
         toast.error('Result is taking too long — check My Submissions page for your result.');
         return;
       }
 
-      // Smart backoff: fast at first (1s), then slower (2s) to reduce DB load
       const delay = attempts < 20 ? 1000 : 2000;
       setTimeout(poll, delay);
     };
 
-    // Start first poll after 2s (give server time to start processing)
     setTimeout(poll, 2000);
   }, []);
 
@@ -387,14 +391,53 @@ export default function StudentProblem() {
                     <p>Submit your code to see results</p>
                   </div>
                 ) : polling ? (
-                  <div className="text-center py-12">
-                    <Loader size={32} className="mx-auto mb-3 text-sky-400 animate-spin" />
-                    <p className="text-gray-400 font-medium">Running test cases…</p>
-                    {submitElapsed > 0 && (
-                      <p className="text-sky-400 font-mono text-lg mt-2">{submitElapsed}s elapsed</p>
+                  <div className="space-y-3">
+                    {/* Queue position card */}
+                    {queueInfo && queueInfo.queuePosition > 0 ? (
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                            <span className="text-amber-400 font-bold text-sm">{queueInfo.queuePosition}</span>
+                          </div>
+                          <div>
+                            <div className="text-sm font-semibold text-amber-300">In queue — position #{queueInfo.queuePosition}</div>
+                            <div className="text-xs text-amber-600 mt-0.5">
+                              ~{queueInfo.estimatedWaitSec}s until your code starts running
+                            </div>
+                          </div>
+                          <div className="ml-auto text-right">
+                            <div className="text-xs text-amber-600">{queueInfo.activeSubmissions}/{5} slots busy</div>
+                          </div>
+                        </div>
+                        {/* Queue visualizer */}
+                        <div className="flex gap-1.5 mt-1">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <div key={i} className={`h-1.5 flex-1 rounded-full ${i < queueInfo.activeSubmissions ? 'bg-amber-500' : 'bg-gray-700'}`} />
+                          ))}
+                        </div>
+                        <div className="text-xs text-amber-700 mt-1.5">
+                          {queueInfo.activeSubmissions} student{queueInfo.activeSubmissions !== 1 ? 's' : ''} ahead of you running · {queueInfo.queueLength} in queue
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
+                        <div className="flex items-center gap-3 mb-3">
+                          <Loader size={20} className="text-sky-400 animate-spin flex-shrink-0" />
+                          <div>
+                            <div className="text-sm font-semibold text-sky-300">Your code is running now</div>
+                            <div className="text-xs text-sky-600 mt-0.5">Test cases executing on the server</div>
+                          </div>
+                          {submitElapsed > 0 && (
+                            <span className="ml-auto font-mono text-lg font-bold text-sky-400">{submitElapsed}s</span>
+                          )}
+                        </div>
+                        {/* Progress bar */}
+                        <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
+                          <div className="h-full rounded-full bg-sky-500 animate-pulse" style={{ width: `${Math.min((submitElapsed / 35) * 100, 95)}%`, transition: 'width 1s linear' }} />
+                        </div>
+                      </div>
                     )}
-                    <p className="text-gray-600 text-xs mt-2">Java needs ~15-35s. Please wait.</p>
-                    <p className="text-sky-700 text-xs mt-1 font-semibold">✋ Do not click Submit again — it's running!</p>
+                    <p className="text-xs text-center font-semibold text-sky-700">✋ Do not click Submit again — your submission is being processed!</p>
                   </div>
                 ) : (
                   <div>
