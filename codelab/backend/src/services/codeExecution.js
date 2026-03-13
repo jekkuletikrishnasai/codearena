@@ -35,9 +35,17 @@ console.log(JAVAC ? `✅ javac: ${JAVAC}` : '⚠️  javac not found — Java wi
 // ── Java compile semaphore: max 2 concurrent javac processes ──────────────────
 // On free tier (512MB RAM), running 10 JVMs simultaneously causes OOM kills.
 // Serializing compilation prevents this — runs still execute in parallel after.
+// ── Java semaphores: throttle both compile AND run to prevent OOM ─────────────
+// Free tier = 512MB RAM. Each JVM needs ~80-100MB.
+// MAX 2 compile + MAX 4 run = peak ~600MB — safe.
+// Without throttling: 20 students × 3 test cases = 60 JVMs → OOM kills.
 let activeCompilations = 0;
 const MAX_COMPILATIONS = 2;
 const compileQueue = [];
+
+let activeJavaRuns = 0;
+const MAX_JAVA_RUNS = 4;   // max parallel JVM instances across ALL submissions
+const javaRunQueue = [];
 
 function withCompileSemaphore(fn) {
   return new Promise((resolve, reject) => {
@@ -52,6 +60,25 @@ function withCompileSemaphore(fn) {
           });
       } else {
         compileQueue.push(attempt);
+      }
+    };
+    attempt();
+  });
+}
+
+function withJavaRunSemaphore(fn) {
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      if (activeJavaRuns < MAX_JAVA_RUNS) {
+        activeJavaRuns++;
+        fn()
+          .then(resolve).catch(reject)
+          .finally(() => {
+            activeJavaRuns--;
+            if (javaRunQueue.length > 0) javaRunQueue.shift()();
+          });
+      } else {
+        javaRunQueue.push(attempt);
       }
     };
     attempt();
@@ -108,11 +135,15 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
       if (JAVAC) {
         const { ok, errorMsg } = await compileJava(tmpDir);
         if (!ok) return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
-        const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
-        return { ...res, executionTimeMs: Date.now() - start };
+        return withJavaRunSemaphore(async () => {
+          const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+          return { ...res, executionTimeMs: Date.now() - start };
+        });
       } else {
-        const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
-        return { ...res, executionTimeMs: Date.now() - start };
+        return withJavaRunSemaphore(async () => {
+          const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
+          return { ...res, executionTimeMs: Date.now() - start };
+        });
       }
 
     } else if (language === 'python') {
@@ -168,29 +199,33 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
         if (!ok) {
           return testCases.map(tc => ({ testCaseId: tc.id, stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: 0, timedOut: false }));
         }
-        // Run all test cases in parallel — share the same .class file
+        // Run all test cases — throttled by JVM semaphore to prevent OOM
         return await Promise.all(testCases.map(async (tc, i) => {
           const tcDir = `${tmpDir}/tc_${i}`;
           await fs.mkdir(tcDir, { recursive: true });
           await fs.writeFile(`${tcDir}/input.txt`, tc.input || '', 'utf8');
-          const start = Date.now();
-          const res = await runCommand(
-            `"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`,
-            timeLimitMs + 5000
-          );
-          return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
+          return withJavaRunSemaphore(async () => {
+            const start = Date.now();
+            const res = await runCommand(
+              `"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`,
+              timeLimitMs + 5000
+            );
+            return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
+          });
         }));
 
       } else {
-        // No javac fallback — parallel java SourceFile.java (slower)
+        // No javac fallback — throttled java SourceFile.java
         return await Promise.all(testCases.map(async (tc, i) => {
           const tcDir = `${tmpDir}/tc_${i}`;
           await fs.mkdir(tcDir, { recursive: true });
           await fs.writeFile(`${tcDir}/Solution.java`, code, 'utf8');
           await fs.writeFile(`${tcDir}/input.txt`, tc.input || '', 'utf8');
-          const start = Date.now();
-          const res = await runCommand(`cd "${tcDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
-          return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
+          return withJavaRunSemaphore(async () => {
+            const start = Date.now();
+            const res = await runCommand(`cd "${tcDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
+            return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
+          });
         }));
       }
 

@@ -402,4 +402,20 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
+// DELETE /api/submissions/:id — admin only
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    // Delete test case results first (FK constraint), then the submission
+    await query('DELETE FROM test_case_results WHERE submission_id = $1', [req.params.id]);
+    const result = await query('DELETE FROM submissions WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+    res.json({ success: true, deleted: req.params.id });
+  } catch (err) {
+    console.error('Delete submission error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router;
