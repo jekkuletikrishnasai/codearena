@@ -126,59 +126,78 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
   const tmpDir = path.join(os.tmpdir(), `cl-${uuidv4()}`);
   await fs.mkdir(tmpDir, { recursive: true });
 
-  try {
-    const start = Date.now();
+  // cleanup is called explicitly AFTER the process exits — never in finally
+  // (finally fires when the Promise is returned, not when it resolves,
+  //  which would delete tmpDir while the JVM is still running inside it)
+  const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 
+  const start = Date.now();
+
+  try {
     if (language === 'java') {
       await fs.writeFile(`${tmpDir}/Solution.java`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
       if (JAVAC) {
         const { ok, errorMsg } = await compileJava(tmpDir);
-        if (!ok) return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
+        if (!ok) { cleanup(); return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false }; }
         return withJavaRunSemaphore(async () => {
-          const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" -cp . Solution < input.txt`, timeLimitMs + 5000);
-          return { ...res, executionTimeMs: Date.now() - start };
+          try {
+            const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" -cp . Solution < input.txt`, timeLimitMs + 5000);
+            return { ...res, executionTimeMs: Date.now() - start };
+          } finally { cleanup(); }
         });
       } else {
         return withJavaRunSemaphore(async () => {
-          const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
-          return { ...res, executionTimeMs: Date.now() - start };
+          try {
+            const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
+            return { ...res, executionTimeMs: Date.now() - start };
+          } finally { cleanup(); }
         });
       }
 
     } else if (language === 'python') {
       await fs.writeFile(`${tmpDir}/solution.py`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
-      const res = await runCommand(`"${PYTHON}" "${tmpDir}/solution.py" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
-      return { ...res, executionTimeMs: Date.now() - start };
+      try {
+        const res = await runCommand(`"${PYTHON}" "${tmpDir}/solution.py" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+        return { ...res, executionTimeMs: Date.now() - start };
+      } finally { cleanup(); }
 
     } else if (language === 'javascript') {
       await fs.writeFile(`${tmpDir}/solution.js`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
-      const res = await runCommand(`"${NODE}" "${tmpDir}/solution.js" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
-      return { ...res, executionTimeMs: Date.now() - start };
+      try {
+        const res = await runCommand(`"${NODE}" "${tmpDir}/solution.js" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+        return { ...res, executionTimeMs: Date.now() - start };
+      } finally { cleanup(); }
 
     } else if (language === 'cpp') {
       await fs.writeFile(`${tmpDir}/solution.cpp`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
       const cr = await runCommand(`"${GPP}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.cpp" 2>&1`, 30000);
-      if (cr.exitCode !== 0) return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
-      const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
-      return { ...res, executionTimeMs: Date.now() - start };
+      if (cr.exitCode !== 0) { cleanup(); return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false }; }
+      try {
+        const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+        return { ...res, executionTimeMs: Date.now() - start };
+      } finally { cleanup(); }
 
     } else if (language === 'c') {
       await fs.writeFile(`${tmpDir}/solution.c`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
       const cr = await runCommand(`"${GCC}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.c" 2>&1`, 30000);
-      if (cr.exitCode !== 0) return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
-      const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
-      return { ...res, executionTimeMs: Date.now() - start };
+      if (cr.exitCode !== 0) { cleanup(); return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false }; }
+      try {
+        const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+        return { ...res, executionTimeMs: Date.now() - start };
+      } finally { cleanup(); }
 
     } else {
+      cleanup();
       throw new Error(`Unsupported language: ${language}`);
     }
-  } finally {
-    fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  } catch (err) {
+    cleanup();
+    throw err;
   }
 }
 
