@@ -105,6 +105,7 @@ export default function StudentProblem() {
   };
 
   const submitCode = async () => {
+    if (submitting || polling) return; // hard guard — ignore extra clicks
     setSubmitting(true);
     setSubmissionResult(null);
     try {
@@ -115,7 +116,7 @@ export default function StudentProblem() {
       toast.success('Submitted! Running test cases…');
       pollResult(sid);
     } catch (err) {
-      toast.error('Submission failed');
+      toast.error('Submission failed. Please try again.');
       setSubmitting(false);
     }
   };
@@ -123,6 +124,7 @@ export default function StudentProblem() {
   const pollResult = useCallback(async (sid) => {
     setPolling(true);
     let attempts = 0;
+    const MAX_ATTEMPTS = 150; // 150 × 800ms = 2 minutes max
     const interval = setInterval(async () => {
       attempts++;
       try {
@@ -134,15 +136,20 @@ export default function StudentProblem() {
           setSubmitting(false);
           clearInterval(interval);
           if (sub.status === 'accepted') toast.success('All test cases passed! 🎉');
+          else if (sub.status === 'wrong_answer') toast.error('Wrong answer — check your logic');
+          else if (sub.status === 'time_limit_exceeded') toast.error('Time limit exceeded');
+          else if (sub.status === 'compilation_error') toast.error('Compilation error in your code');
+          else if (sub.status === 'runtime_error') toast.error('Runtime error — check your code');
           else toast.error(`Result: ${sub.status.replace(/_/g, ' ')}`);
         }
       } catch {}
-      if (attempts >= 30) {
+      if (attempts >= MAX_ATTEMPTS) {
         clearInterval(interval);
         setPolling(false);
         setSubmitting(false);
+        toast.error('Result is taking too long — check My Submissions page for your result.');
       }
-    }, 1500);
+    }, 800); // poll every 800ms instead of 1500ms
   }, []);
 
   // Cleanup timer on unmount
@@ -268,10 +275,15 @@ export default function StudentProblem() {
           {runBtnContent}
         </button>
 
-        <button onClick={submitCode} disabled={submitting}
-          className="flex items-center gap-1.5 px-4 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
-          {submitting ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
-          {submitting ? 'Submitting…' : 'Submit'}
+        <button onClick={submitCode} disabled={submitting || polling}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all min-w-[110px] justify-center
+            ${(submitting || polling)
+              ? 'bg-sky-900/60 text-sky-300 border border-sky-700/50 cursor-not-allowed'
+              : 'bg-sky-500 hover:bg-sky-400 text-white'
+            }`}>
+          {polling ? <><Loader size={14} className="animate-spin" /><span>Checking…</span></> :
+           submitting ? <><Loader size={14} className="animate-spin" /><span>Submitting…</span></> :
+           <><Send size={14} /><span>Submit</span></>}
         </button>
       </div>
 
@@ -336,7 +348,9 @@ export default function StudentProblem() {
                 ) : polling ? (
                   <div className="text-center py-12">
                     <Loader size={32} className="mx-auto mb-3 text-sky-400 animate-spin" />
-                    <p className="text-gray-400">Running test cases…</p>
+                    <p className="text-gray-400 font-medium">Running test cases…</p>
+                    <p className="text-gray-600 text-xs mt-2">Java needs ~8-15s to start. Please wait.</p>
+                    <p className="text-sky-700 text-xs mt-1">Do not click Submit again ✋</p>
                   </div>
                 ) : (
                   <div>

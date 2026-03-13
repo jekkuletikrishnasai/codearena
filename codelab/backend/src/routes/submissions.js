@@ -1,13 +1,13 @@
 const express = require('express');
 const { query, getClient } = require('../db');
 const { authenticate, requireAdmin } = require('../middleware/auth');
-const { executeCode, executeCodeSimulated, isDockerAvailable } = require('../services/codeExecution');
+const { runTestCases, runTestCasesSimulated, executeCode, executeCodeSimulated, isDockerAvailable } = require('../services/codeExecution');
 
 const router = express.Router();
 
 // ── Rate limiter: 1 execution per student every 5 seconds ─────────────────────
-const lastRunTime = new Map();
-const RATE_LIMIT_MS = 5000;
+const lastRunTime = new Map(); // studentId -> timestamp
+const RATE_LIMIT_MS = 5000;   // 5 seconds between runs
 
 function isRateLimited(studentId) {
   const last = lastRunTime.get(studentId) || 0;
@@ -15,6 +15,7 @@ function isRateLimited(studentId) {
 }
 function markRun(studentId) {
   lastRunTime.set(studentId, Date.now());
+  // Clean up old entries every 100 calls to prevent memory leak
   if (lastRunTime.size > 200) {
     const cutoff = Date.now() - 60000;
     for (const [k, v] of lastRunTime) {
@@ -23,13 +24,23 @@ function markRun(studentId) {
   }
 }
 
-// ── Execution queue: max 5 concurrent Java executions ─────────────────────────
+// ── Wall time buffer: give Java extra time for JVM startup ───────────────────
+const JAVA_JVM_BUFFER_MS = 20000; // 20s extra for JVM startup on free tier
+
+function getWallTime(language, problemTimeLimitMs) {
+  if (language === 'java') return problemTimeLimitMs + JAVA_JVM_BUFFER_MS;
+  return problemTimeLimitMs + 5000; // 5s buffer for other languages
+}
+
+// ── Execution queues: separate queues for Run vs Submit ───────────────────────
 let activeExecutions = 0;
-const MAX_CONCURRENT = 8;
-const MAX_CONCURRENT_SUBMIT = 6;
+const MAX_CONCURRENT = 5;        // Max concurrent executions (submit)
+const MAX_CONCURRENT_SUBMIT = 4; // Max submissions being processed simultaneously
+const MAX_CONCURRENT_RUN = 3;    // Dedicated slots for Run (never starved by Submit)
+let activeRunExecutions = 0;
 let activeSubmissions = 0;
 const submitQueue = [];
-const executionQueue = [];
+const runExecutionQueue = [];
 
 function runWithSubmitQueue(fn) {
   return new Promise((resolve, reject) => {
@@ -46,6 +57,7 @@ function runWithSubmitQueue(fn) {
     else submitQueue.push(task);
   });
 }
+const executionQueue = [];
 
 function runWithQueue(fn, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
@@ -60,6 +72,7 @@ function runWithQueue(fn, timeoutMs = 120000) {
 
     const task = () => {
       if (settled) {
+        // Already timed out while waiting in queue — skip and free slot
         activeExecutions--;
         if (executionQueue.length > 0) executionQueue.shift()();
         return;
@@ -82,6 +95,27 @@ function runWithQueue(fn, timeoutMs = 120000) {
   });
 }
 
+function runWithRunQueue(fn, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeoutHandle = setTimeout(() => {
+      if (!settled) { settled = true; reject(new Error('Run queue timeout')); }
+    }, timeoutMs);
+
+    const task = () => {
+      if (settled) { activeRunExecutions--; if (runExecutionQueue.length > 0) runExecutionQueue.shift()(); return; }
+      activeRunExecutions++;
+      fn()
+        .then(r => { if (!settled) { settled = true; clearTimeout(timeoutHandle); resolve(r); } })
+        .catch(e => { if (!settled) { settled = true; clearTimeout(timeoutHandle); reject(e); } })
+        .finally(() => { activeRunExecutions--; if (runExecutionQueue.length > 0) runExecutionQueue.shift()(); });
+    };
+
+    if (activeRunExecutions < MAX_CONCURRENT_RUN) task();
+    else runExecutionQueue.push(task);
+  });
+}
+
 // POST /api/submissions - submit code
 router.post('/', authenticate, async (req, res) => {
   const { problemId, assignmentId, language, code } = req.body;
@@ -94,6 +128,7 @@ router.post('/', authenticate, async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    // Get problem with test cases
     const problemResult = await client.query(
       'SELECT * FROM problems WHERE id = $1', [problemId]
     );
@@ -113,6 +148,7 @@ router.post('/', authenticate, async (req, res) => {
     );
     const testCases = testCasesResult.rows;
 
+    // Create submission record
     const submissionResult = await client.query(`
       INSERT INTO submissions (student_id, problem_id, assignment_id, language, code, status, max_score)
       VALUES ($1, $2, $3, $4, $5, 'running', $6) RETURNING *
@@ -121,45 +157,37 @@ router.post('/', authenticate, async (req, res) => {
     const submission = submissionResult.rows[0];
     await client.query('COMMIT');
 
+    // Run test cases (async - respond immediately)
     res.status(202).json({
       submission: { id: submission.id, status: 'running' },
       message: 'Submission received and running',
     });
 
+    // Execute in background with queue to prevent overload
     runWithSubmitQueue(() => processSubmission(submission.id, code, language, testCases, problem)).catch(console.error);
 
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Submit error:', err);
     res.status(500).json({ error: 'Internal server error' });
-  } finally {
-    client.release();
   }
 });
 
 async function processSubmission(submissionId, code, language, testCases, problem) {
-  const problemTimeLimitMs = problem.time_limit_ms || 5000;
-
-  const LANGUAGE_WALL_TIME_BUFFER = {
-    java:       25000,
-    cpp:        10000,
-    c:          10000,
-    python:     5000,
-    javascript: 5000,
-  };
-  const wallTimeMs = problemTimeLimitMs + (LANGUAGE_WALL_TIME_BUFFER[language] || 8000);
-
+  // ── PHASE 1: Execute code — NO DB client held during this slow phase ──────
+  // We only grab a DB connection AFTER all execution is done (in Phase 2).
+  // This prevents 20 submissions from holding 20 DB connections simultaneously
+  // while waiting for Java to compile/run (which takes 5-40 seconds each).
   const results = [];
   for (const tc of testCases) {
     const result = await runWithQueue(() =>
-      executeCode(code, language, tc.input, wallTimeMs)
+      executeCode(code, language, tc.input, getWallTime(language, problem.time_limit_ms || 10000))
     ).catch(err => ({
       stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
     }));
 
     const actual   = result.stdout.trim();
     const expected = tc.expected_output.trim();
-
     const isCompileError = result.exitCode !== 0 && (
       result.stderr.includes('error: compilation failed') ||
       result.stderr.includes('javac') ||
@@ -168,11 +196,8 @@ async function processSubmission(submissionId, code, language, testCases, proble
       result.stderr.includes('error: expected') ||
       result.stderr.includes('compilation failed')
     );
-
-    const exceededTimeLimit = result.timedOut || result.executionTimeMs > problemTimeLimitMs;
-
     let status;
-    if (exceededTimeLimit)          status = 'time_limit_exceeded';
+    if (result.timedOut)            status = 'time_limit_exceeded';
     else if (isCompileError)        status = 'compilation_error';
     else if (result.exitCode !== 0) status = 'runtime_error';
     else if (actual === expected)   status = 'passed';
@@ -186,6 +211,7 @@ async function processSubmission(submissionId, code, language, testCases, proble
       expected, isHidden: tc.is_hidden,
     });
 
+    // Early exit on compilation error — skip remaining test cases
     if (status === 'compilation_error') {
       for (const remaining of testCases.slice(results.length)) {
         results.push({
@@ -198,6 +224,7 @@ async function processSubmission(submissionId, code, language, testCases, proble
     }
   }
 
+  // ── PHASE 2: Write results to DB (grab client only NOW, briefly) ──────────
   const client = await getClient();
   try {
     const passed = results.filter(r => r.status === 'passed').length;
@@ -237,6 +264,7 @@ async function processSubmission(submissionId, code, language, testCases, proble
   }
 }
 
+
 // POST /api/submissions/run - run code without submitting
 router.post('/run', authenticate, async (req, res) => {
   try {
@@ -245,6 +273,7 @@ router.post('/run', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Code and language required' });
     }
 
+    // Rate limit: 1 run per student per 5 seconds
     if (isRateLimited(req.user.id)) {
       const waitMs = RATE_LIMIT_MS - (Date.now() - (lastRunTime.get(req.user.id) || 0));
       return res.status(429).json({
@@ -253,10 +282,11 @@ router.post('/run', authenticate, async (req, res) => {
     }
     markRun(req.user.id);
 
-    const result = await runWithQueue(async () => {
+    // Use dedicated run queue — separate from submit queue so runs are never starved
+    const result = await runWithRunQueue(async () => {
       const dockerAvailable = await isDockerAvailable();
       return dockerAvailable
-        ? await executeCode(code, language, stdin)
+        ? await executeCode(code, language, stdin, 30000)
         : await executeCodeSimulated(code, language, stdin);
     });
 
@@ -337,6 +367,7 @@ router.get('/:id', authenticate, async (req, res) => {
 
     const submission = result.rows[0];
 
+    // Get test case results
     const tcResults = await query(`
       SELECT tcr.*, tc.input, tc.expected_output, tc.is_hidden, tc.points
       FROM test_case_results tcr
@@ -345,6 +376,7 @@ router.get('/:id', authenticate, async (req, res) => {
       ORDER BY tc.order_index
     `, [req.params.id]);
 
+    // Hide hidden test case details for students
     const filteredResults = tcResults.rows.map(r => {
       if (req.user.role === 'student' && r.is_hidden) {
         return { ...r, input: '[hidden]', expected_output: '[hidden]', actual_output: '[hidden]' };
@@ -356,19 +388,6 @@ router.get('/:id', authenticate, async (req, res) => {
     res.json({ submission });
   } catch (err) {
     console.error('Get submission error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// DELETE /api/submissions/:id — admin only, single delete
-router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
-  try {
-    await query('DELETE FROM test_case_results WHERE submission_id = $1', [req.params.id]);
-    const result = await query('DELETE FROM submissions WHERE id = $1 RETURNING id', [req.params.id]);
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Submission not found' });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Delete submission error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
