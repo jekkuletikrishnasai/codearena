@@ -23,6 +23,42 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ── DIAGNOSTIC: /api/diag — see all binary paths ──────────────────────────────
+app.get('/api/diag', (req, res) => {
+  const { execSync } = require('child_process');
+  const run = (cmd) => {
+    try { return execSync(cmd, { encoding: 'utf8', timeout: 5000 }).trim(); }
+    catch(e) { return `ERR: ${e.message.split('\n')[0]}`; }
+  };
+  res.json({
+    javacPath: require('./services/codeExecution')._javacPath(),
+    which_javac: run('which javac'),
+    which_java:  run('which java'),
+    javac_find:  run('find /usr -name "javac" -type f 2>/dev/null | head -3'),
+    java_version: run('java -version 2>&1 | head -1'),
+    node: process.execPath,
+    platform: process.platform,
+  });
+});
+
+// ── DIAGNOSTIC: /api/diag/javatest — run a tiny Java program end-to-end ───────
+app.get('/api/diag/javatest', async (req, res) => {
+  const { executeCode, _javacPath } = require('./services/codeExecution');
+  const code = `public class Solution {\n  public static void main(String[] args) {\n    System.out.println("java_ok");\n  }\n}`;
+  try {
+    const result = await executeCode(code, 'java', '', 20000);
+    res.json({
+      javacPath: _javacPath(),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      executionTimeMs: result.executionTimeMs,
+    });
+  } catch(e) {
+    res.json({ error: e.message, javacPath: _javacPath() });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
