@@ -1,8 +1,9 @@
 /**
  * Code Execution Service
  *
- * Java strategy: javac compile-once → java -cp .class per test case
- * javac is discovered at startup using shell `find` — works regardless of JDK install path.
+ * KEY FIX: Java compilation is serialized (max 2 concurrent javac processes)
+ * to prevent OOM on Render free tier (512MB RAM).
+ * Compiled .class files are then run in parallel per test case.
  */
 
 const { exec, execSync } = require('child_process');
@@ -18,29 +19,44 @@ const GPP    = '/usr/bin/g++';
 const GCC    = '/usr/bin/gcc';
 
 // ── Discover javac synchronously at startup ───────────────────────────────────
-// We use execSync so it's resolved before any request comes in.
-// Tries PATH first, then find — works on any Alpine/Debian/Ubuntu JDK layout.
 let JAVAC = null;
 try {
-  const fromWhich = execSync('which javac 2>/dev/null', { timeout: 5000 }).toString().trim();
-  if (fromWhich) { JAVAC = fromWhich; }
+  const r = execSync('which javac 2>/dev/null', { timeout: 5000 }).toString().trim();
+  if (r) JAVAC = r;
 } catch {}
-
 if (!JAVAC) {
   try {
-    const fromFind = execSync('find /usr -name "javac" -type f 2>/dev/null | head -1', { timeout: 8000 }).toString().trim();
-    if (fromFind) { JAVAC = fromFind; }
+    const r = execSync('find /usr -name "javac" -type f 2>/dev/null | head -1', { timeout: 8000 }).toString().trim();
+    if (r) JAVAC = r;
   } catch {}
 }
+console.log(JAVAC ? `✅ javac: ${JAVAC}` : '⚠️  javac not found — Java will be slow');
 
-if (JAVAC) {
-  console.log(`✅ javac found: ${JAVAC}`);
-} else {
-  console.warn('⚠️  javac not found — Java will use single-file execution (slower). Install openjdk17-jdk.');
+// ── Java compile semaphore: max 2 concurrent javac processes ──────────────────
+// On free tier (512MB RAM), running 10 JVMs simultaneously causes OOM kills.
+// Serializing compilation prevents this — runs still execute in parallel after.
+let activeCompilations = 0;
+const MAX_COMPILATIONS = 2;
+const compileQueue = [];
+
+function withCompileSemaphore(fn) {
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      if (activeCompilations < MAX_COMPILATIONS) {
+        activeCompilations++;
+        fn()
+          .then(resolve).catch(reject)
+          .finally(() => {
+            activeCompilations--;
+            if (compileQueue.length > 0) compileQueue.shift()();
+          });
+      } else {
+        compileQueue.push(attempt);
+      }
+    };
+    attempt();
+  });
 }
-
-// Export so the diag endpoint can report it
-module.exports._javacPath = () => JAVAC;
 
 // ── Shell execution helper ────────────────────────────────────────────────────
 function runCommand(cmd, timeoutMs) {
@@ -49,11 +65,13 @@ function runCommand(cmd, timeoutMs) {
       timeout: timeoutMs,
       maxBuffer: 2 * 1024 * 1024,
       shell: '/bin/sh',
-      env: {
-        ...process.env,
-        PATH: '/usr/local/bin:/usr/bin:/bin',
-      },
+      env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin' },
     }, (error, stdout, stderr) => {
+      // Log runtime errors to help debugging
+      if (error && !error.killed) {
+        const preview = (stderr || stdout || '').substring(0, 120);
+        if (preview) console.error(`[exec err] ${preview}`);
+      }
       resolve({
         stdout:   stdout  || '',
         stderr:   stderr  || '',
@@ -64,17 +82,19 @@ function runCommand(cmd, timeoutMs) {
   });
 }
 
-// ── Helper: compile Java, return { ok, errorMsg } ────────────────────────────
+// ── Java compile helper ───────────────────────────────────────────────────────
 async function compileJava(dir) {
-  if (!JAVAC) return { ok: false, errorMsg: 'javac not available on this server. Please contact admin.' };
-  const result = await runCommand(`"${JAVAC}" "${dir}/Solution.java" 2>&1`, 30000);
-  if (result.exitCode !== 0) {
-    return { ok: false, errorMsg: result.stdout || result.stderr };
-  }
-  return { ok: true };
+  if (!JAVAC) return { ok: false, errorMsg: 'javac not installed on this server.' };
+  return withCompileSemaphore(async () => {
+    const result = await runCommand(`"${JAVAC}" "${dir}/Solution.java" 2>&1`, 30000);
+    if (result.exitCode !== 0) {
+      return { ok: false, errorMsg: result.stdout || result.stderr };
+    }
+    return { ok: true };
+  });
 }
 
-// ── Single execution (used by /run endpoint) ──────────────────────────────────
+// ── Single execution (/run endpoint) ─────────────────────────────────────────
 async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
   const tmpDir = path.join(os.tmpdir(), `cl-${uuidv4()}`);
   await fs.mkdir(tmpDir, { recursive: true });
@@ -85,15 +105,12 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
     if (language === 'java') {
       await fs.writeFile(`${tmpDir}/Solution.java`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
-
       if (JAVAC) {
-        // compile with javac (fast .class execution)
         const { ok, errorMsg } = await compileJava(tmpDir);
         if (!ok) return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
         const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
         return { ...res, executionTimeMs: Date.now() - start };
       } else {
-        // fallback: java SourceFile.java (slower — JVM startup per run)
         const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" Solution.java < input.txt`, timeLimitMs + 20000);
         return { ...res, executionTimeMs: Date.now() - start };
       }
@@ -113,16 +130,16 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
     } else if (language === 'cpp') {
       await fs.writeFile(`${tmpDir}/solution.cpp`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
-      const compile = await runCommand(`"${GPP}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.cpp" 2>&1`, 30000);
-      if (compile.exitCode !== 0) return { stdout: '', stderr: compile.stdout || compile.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
+      const cr = await runCommand(`"${GPP}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.cpp" 2>&1`, 30000);
+      if (cr.exitCode !== 0) return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
       const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
       return { ...res, executionTimeMs: Date.now() - start };
 
     } else if (language === 'c') {
       await fs.writeFile(`${tmpDir}/solution.c`, code, 'utf8');
       await fs.writeFile(`${tmpDir}/input.txt`, stdin || '', 'utf8');
-      const compile = await runCommand(`"${GCC}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.c" 2>&1`, 30000);
-      if (compile.exitCode !== 0) return { stdout: '', stderr: compile.stdout || compile.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
+      const cr = await runCommand(`"${GCC}" -O2 -o "${tmpDir}/sol" "${tmpDir}/solution.c" 2>&1`, 30000);
+      if (cr.exitCode !== 0) return { stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
       const res = await runCommand(`"${tmpDir}/sol" < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
       return { ...res, executionTimeMs: Date.now() - start };
 
@@ -135,42 +152,37 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
 }
 
 /**
- * OPTIMIZED multi-test-case execution
- * Compile ONCE → run ALL test cases in PARALLEL.
- *
- * Java with javac:    compile(2-4s) + N× java -cp .class (~0.5s each) = ~3-5s total
- * Java without javac: N× java Solution.java in parallel (still slow ~8-15s but at least parallel)
- * C/C++:              compile(0.5s) + N× ./sol (parallel, instant)
- * Python/JS:          N× parallel runs
+ * OPTIMIZED: compile ONCE → run all test cases in parallel.
+ * Java compilation is throttled via semaphore to prevent OOM.
  */
 async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
   const tmpDir = path.join(os.tmpdir(), `cl-multi-${uuidv4()}`);
   await fs.mkdir(tmpDir, { recursive: true });
 
   try {
-
-    // ── JAVA ─────────────────────────────────────────────────────────────────
     if (language === 'java') {
       await fs.writeFile(`${tmpDir}/Solution.java`, code, 'utf8');
 
       if (JAVAC) {
-        // Compile ONCE
         const { ok, errorMsg } = await compileJava(tmpDir);
         if (!ok) {
           return testCases.map(tc => ({ testCaseId: tc.id, stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: 0, timedOut: false }));
         }
-        // Run ALL in parallel from .class file
+        // Run all test cases in parallel — share the same .class file
         return await Promise.all(testCases.map(async (tc, i) => {
           const tcDir = `${tmpDir}/tc_${i}`;
           await fs.mkdir(tcDir, { recursive: true });
           await fs.writeFile(`${tcDir}/input.txt`, tc.input || '', 'utf8');
           const start = Date.now();
-          const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`, timeLimitMs + 5000);
+          const res = await runCommand(
+            `"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`,
+            timeLimitMs + 5000
+          );
           return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
         }));
 
       } else {
-        // No javac — run java Solution.java in parallel (each its own JVM, but parallel)
+        // No javac fallback — parallel java SourceFile.java (slower)
         return await Promise.all(testCases.map(async (tc, i) => {
           const tcDir = `${tmpDir}/tc_${i}`;
           await fs.mkdir(tcDir, { recursive: true });
@@ -182,15 +194,13 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
         }));
       }
 
-    // ── C / C++ ──────────────────────────────────────────────────────────────
     } else if (language === 'cpp' || language === 'c') {
       const compiler = language === 'cpp' ? GPP : GCC;
       const srcFile  = language === 'cpp' ? 'solution.cpp' : 'solution.c';
       await fs.writeFile(`${tmpDir}/${srcFile}`, code, 'utf8');
-      const compile = await runCommand(`"${compiler}" -O2 -o "${tmpDir}/sol" "${tmpDir}/${srcFile}" 2>&1`, 30000);
-      if (compile.exitCode !== 0) {
-        const errMsg = compile.stdout || compile.stderr;
-        return testCases.map(tc => ({ testCaseId: tc.id, stdout: '', stderr: errMsg, exitCode: 1, executionTimeMs: 0, timedOut: false }));
+      const cr = await runCommand(`"${compiler}" -O2 -o "${tmpDir}/sol" "${tmpDir}/${srcFile}" 2>&1`, 30000);
+      if (cr.exitCode !== 0) {
+        return testCases.map(tc => ({ testCaseId: tc.id, stdout: '', stderr: cr.stdout || cr.stderr, exitCode: 1, executionTimeMs: 0, timedOut: false }));
       }
       return await Promise.all(testCases.map(async (tc, i) => {
         const tcDir = `${tmpDir}/tc_${i}`;
@@ -201,7 +211,6 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
         return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
       }));
 
-    // ── Python / JavaScript ───────────────────────────────────────────────────
     } else {
       const srcFile = language === 'python' ? 'solution.py' : 'solution.js';
       const runner  = language === 'python' ? PYTHON : NODE;
@@ -251,11 +260,7 @@ const runTestCasesSimulated = runTestCases;
 const isDockerAvailable     = () => Promise.resolve(true);
 
 module.exports = {
-  executeCode,
-  executeCodeMulti,
-  runTestCases,
-  executeCodeSimulated,
-  runTestCasesSimulated,
-  isDockerAvailable,
+  executeCode, executeCodeMulti, runTestCases,
+  executeCodeSimulated, runTestCasesSimulated, isDockerAvailable,
   _javacPath: () => JAVAC,
 };

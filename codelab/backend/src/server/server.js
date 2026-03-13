@@ -64,7 +64,17 @@ app.get('/api/diag', (req, res) => {
   });
 });
 
-// 404 handler
+// DIAGNOSTIC — /api/diag/javatest — runs a tiny Java program and shows full output
+app.get('/api/diag/javatest', async (req, res) => {
+  const { executeCode, _javacPath } = require('./services/codeExecution');
+  const code = `public class Solution { public static void main(String[] args) { System.out.println("java_ok"); } }`;
+  try {
+    const result = await executeCode(code, 'java', '', 15000);
+    res.json({ javacPath: _javacPath(), stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, executionTimeMs: result.executionTimeMs });
+  } catch(e) {
+    res.json({ error: e.message, javacPath: _javacPath() });
+  }
+});
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
