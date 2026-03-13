@@ -136,7 +136,7 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
         const { ok, errorMsg } = await compileJava(tmpDir);
         if (!ok) return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false };
         return withJavaRunSemaphore(async () => {
-          const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
+          const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" -cp . Solution < input.txt`, timeLimitMs + 5000);
           return { ...res, executionTimeMs: Date.now() - start };
         });
       } else {
@@ -207,7 +207,7 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
           return withJavaRunSemaphore(async () => {
             const start = Date.now();
             const res = await runCommand(
-              `"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`,
+              `cd "${tmpDir}" && "${JAVA}" -cp . Solution < "${tcDir}/input.txt"`,
               timeLimitMs + 5000
             );
             return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };

@@ -97,7 +97,7 @@ function runWithQueue(fn, timeoutMs = 120000) {
   });
 }
 
-function runWithRunQueue(fn, timeoutMs = 90000) {  // 90s — enough for javac(5s) + java(2s)
+function runWithRunQueue(fn, timeoutMs = 120000) {  // 120s — covers semaphore wait + javac + run
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeoutHandle = setTimeout(() => {
