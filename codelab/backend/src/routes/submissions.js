@@ -1,7 +1,7 @@
 const express = require('express');
 const { query, getClient } = require('../db');
 const { authenticate, requireAdmin } = require('../middleware/auth');
-const { runTestCases, runTestCasesSimulated, executeCode, executeCodeSimulated, isDockerAvailable } = require('../services/codeExecution');
+const { runTestCases, runTestCasesSimulated, executeCode, executeCodeMulti, executeCodeSimulated, isDockerAvailable } = require('../services/codeExecution');
 
 const router = express.Router();
 
@@ -24,18 +24,22 @@ function markRun(studentId) {
   }
 }
 
-// ── Wall time buffer: give Java extra time for JVM startup ───────────────────
-const JAVA_JVM_BUFFER_MS = 20000; // 20s extra for JVM startup on free tier
+// ── Wall time buffer ─────────────────────────────────────────────────────────
+// Java now uses javac+class execution — JVM startup is ~1-2s not 8-15s.
+// Add only 8s buffer (covers compile time which happens before timing starts).
+const JAVA_JVM_BUFFER_MS = 8000;
 
 function getWallTime(language, problemTimeLimitMs) {
   if (language === 'java') return problemTimeLimitMs + JAVA_JVM_BUFFER_MS;
-  return problemTimeLimitMs + 5000; // 5s buffer for other languages
+  return problemTimeLimitMs + 3000; // 3s buffer for other languages
 }
 
 // ── Execution queues: separate queues for Run vs Submit ───────────────────────
+// Each submission now takes 1 queue slot (compile-once + parallel runs internally)
+// so we can handle more concurrent submissions than before.
 let activeExecutions = 0;
-const MAX_CONCURRENT = 5;        // Max concurrent executions (submit)
-const MAX_CONCURRENT_SUBMIT = 4; // Max submissions being processed simultaneously
+const MAX_CONCURRENT = 6;        // Max concurrent submission executions
+const MAX_CONCURRENT_SUBMIT = 5; // Max submissions in flight simultaneously
 const MAX_CONCURRENT_RUN = 3;    // Dedicated slots for Run (never starved by Submit)
 let activeRunExecutions = 0;
 let activeSubmissions = 0;
@@ -165,19 +169,25 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 async function processSubmission(submissionId, code, language, testCases, problem) {
-  // ── PHASE 1: Execute ALL test cases in PARALLEL — no DB client held ───────
-  // Running in parallel: 3 Java test cases now take ~35s total instead of ~105s.
-  // Each gets its own queue slot — queue handles backpressure automatically.
+  // ── PHASE 1: Compile ONCE + run ALL test cases in parallel ────────────────
+  // executeCodeMulti compiles Java once (javac, ~3-5s) then runs all test cases
+  // in parallel from the .class file (~1-2s each).
+  //
+  // Before this fix: 3 Java test cases × 8-15s JVM startup each = 24-45s
+  // After this fix:  1 compile (3-5s) + 3 parallel runs (1-2s) = ~5-7s total
+  //
+  // The entire submission takes ONE queue slot (not N slots), freeing up
+  // capacity for other students.
   const wallTime = getWallTime(language, problem.time_limit_ms || 10000);
 
-  const rawResults = await Promise.all(
-    testCases.map(tc =>
-      runWithQueue(() =>
-        executeCode(code, language, tc.input, wallTime)
-      ).catch(err => ({
-        stdout: '', stderr: err.message, exitCode: 1, executionTimeMs: 0, timedOut: false,
-      }))
-    )
+  const rawResults = await runWithQueue(() =>
+    executeCodeMulti(code, language, testCases, wallTime)
+  ).catch(err =>
+    // Queue timeout or system error — return error for all test cases
+    testCases.map(tc => ({
+      testCaseId: tc.id, stdout: '', stderr: err.message,
+      exitCode: 1, executionTimeMs: 0, timedOut: false,
+    }))
   );
 
   const results = rawResults.map((result, i) => {
