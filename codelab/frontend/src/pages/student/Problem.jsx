@@ -392,54 +392,61 @@ export default function StudentProblem() {
                   </div>
                 ) : polling ? (
                   <div className="space-y-3">
-                    {/* Queue position card */}
                     {queueInfo && queueInfo.queuePosition > 0 ? (
+                      /* Waiting in queue */
                       <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
                         <div className="flex items-center gap-3 mb-3">
-                          <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center flex-shrink-0">
-                            <span className="text-amber-400 font-bold text-sm">{queueInfo.queuePosition}</span>
+                          <div className="w-9 h-9 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center flex-shrink-0">
+                            <span className="text-amber-300 font-bold text-base">{queueInfo.queuePosition}</span>
                           </div>
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <div className="text-sm font-semibold text-amber-300">In queue — position #{queueInfo.queuePosition}</div>
-                            <div className="text-xs text-amber-600 mt-0.5">
-                              ~{queueInfo.estimatedWaitSec}s until your code starts running
-                            </div>
+                            <div className="text-xs text-amber-600 mt-0.5">~{queueInfo.estimatedWaitSec}s until your code starts · {queueInfo.activeSubmissions}/5 slots busy</div>
                           </div>
-                          <div className="ml-auto text-right">
-                            <div className="text-xs text-amber-600">{queueInfo.activeSubmissions}/{5} slots busy</div>
-                          </div>
+                          {submitElapsed > 0 && (
+                            <span className="font-mono text-lg font-bold text-amber-400 flex-shrink-0">{submitElapsed}s</span>
+                          )}
                         </div>
-                        {/* Queue visualizer */}
-                        <div className="flex gap-1.5 mt-1">
+                        <div className="flex gap-1.5 mb-2">
                           {Array.from({ length: 5 }).map((_, i) => (
-                            <div key={i} className={`h-1.5 flex-1 rounded-full ${i < queueInfo.activeSubmissions ? 'bg-amber-500' : 'bg-gray-700'}`} />
+                            <div key={i} className={`h-2 flex-1 rounded-full transition-all duration-500 ${i < queueInfo.activeSubmissions ? 'bg-amber-500' : 'bg-gray-700'}`} />
                           ))}
                         </div>
-                        <div className="text-xs text-amber-700 mt-1.5">
-                          {queueInfo.activeSubmissions} student{queueInfo.activeSubmissions !== 1 ? 's' : ''} ahead of you running · {queueInfo.queueLength} in queue
+                        <div className="text-xs text-amber-700">
+                          {queueInfo.activeSubmissions} student{queueInfo.activeSubmissions !== 1 ? 's' : ''} ahead running · {queueInfo.queueLength} waiting behind you
                         </div>
                       </div>
                     ) : (
+                      /* Slot acquired — executing */
                       <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
                         <div className="flex items-center gap-3 mb-3">
                           <Loader size={20} className="text-sky-400 animate-spin flex-shrink-0" />
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <div className="text-sm font-semibold text-sky-300">Your code is running now</div>
-                            <div className="text-xs text-sky-600 mt-0.5">Test cases executing on the server</div>
+                            <div className="text-xs text-sky-600 mt-0.5">
+                              {queueInfo ? `${queueInfo.activeSubmissions}/5 slots busy` : 'Test cases executing on server'}
+                            </div>
                           </div>
                           {submitElapsed > 0 && (
-                            <span className="ml-auto font-mono text-lg font-bold text-sky-400">{submitElapsed}s</span>
+                            <span className="font-mono text-lg font-bold text-sky-400 flex-shrink-0">{submitElapsed}s</span>
                           )}
                         </div>
-                        {/* Progress bar */}
+                        {queueInfo && (
+                          <div className="flex gap-1.5 mb-2">
+                            {Array.from({ length: 5 }).map((_, i) => (
+                              <div key={i} className={`h-2 flex-1 rounded-full transition-all duration-500 ${i < queueInfo.activeSubmissions ? 'bg-sky-500' : 'bg-gray-700'}`} />
+                            ))}
+                          </div>
+                        )}
                         <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
-                          <div className="h-full rounded-full bg-sky-500 animate-pulse" style={{ width: `${Math.min((submitElapsed / 35) * 100, 95)}%`, transition: 'width 1s linear' }} />
+                          <div className="h-full rounded-full bg-sky-500 transition-all duration-1000"
+                            style={{ width: `${Math.min((submitElapsed / 35) * 100, 95)}%` }} />
                         </div>
                       </div>
                     )}
                     <p className="text-xs text-center font-semibold text-sky-700">✋ Do not click Submit again — your submission is being processed!</p>
                   </div>
-                ) : (
+                ) : submissionResult ? (
                   <div>
                     <div className={`rounded-xl p-4 mb-5 ${
                       submissionResult.status === 'accepted'         ? 'bg-emerald-500/10 border border-emerald-500/30' :
@@ -490,7 +497,7 @@ export default function StudentProblem() {
                       ))}
                     </div>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </div>
