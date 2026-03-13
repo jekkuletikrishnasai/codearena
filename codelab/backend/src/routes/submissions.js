@@ -35,12 +35,10 @@ function getWallTime(language, problemTimeLimitMs) {
 }
 
 // ── Execution queues: separate queues for Run vs Submit ───────────────────────
-// Each submission now takes 1 queue slot (compile-once + parallel runs internally)
-// so we can handle more concurrent submissions than before.
 let activeExecutions = 0;
 const MAX_CONCURRENT = 6;        // Max concurrent submission executions
 const MAX_CONCURRENT_SUBMIT = 5; // Max submissions in flight simultaneously
-const MAX_CONCURRENT_RUN = 3;    // Dedicated slots for Run (never starved by Submit)
+const MAX_CONCURRENT_RUN = 5;    // Run slots — increased since /run is now fast with javac
 let activeRunExecutions = 0;
 let activeSubmissions = 0;
 const submitQueue = [];
@@ -99,7 +97,7 @@ function runWithQueue(fn, timeoutMs = 120000) {
   });
 }
 
-function runWithRunQueue(fn, timeoutMs = 60000) {
+function runWithRunQueue(fn, timeoutMs = 90000) {  // 90s — enough for javac(5s) + java(2s)
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeoutHandle = setTimeout(() => {

@@ -45,6 +45,8 @@ app.get('/api/diag', (req, res) => {
       node:     run('which node'),
       nodejs:   run('which nodejs'),
       java:     run('which java'),
+      javac:    run('which javac'),
+      javac_find: run('find /usr -name "javac" -type f 2>/dev/null | head -3'),
       gcc:      run('which gcc'),
       gpp:      run('which g++'),
     },
