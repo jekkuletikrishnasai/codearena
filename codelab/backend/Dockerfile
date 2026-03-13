@@ -6,7 +6,7 @@ RUN apk add --no-cache \
     gcc \
     g++ \
     musl-dev \
-    openjdk17-jre
+    openjdk17-jdk
 
 WORKDIR /app
 COPY package*.json ./
