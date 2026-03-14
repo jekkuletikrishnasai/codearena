@@ -147,7 +147,8 @@ async function executeCode(code, language, stdin = '', timeLimitMs = 5000) {
         if (!ok) { cleanup(); return { stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: Date.now() - start, timedOut: false }; }
         return withJavaRunSemaphore(async () => {
           try {
-            const res = await runCommand(`cd "${tmpDir}" && "${JAVA}" -cp . Solution < input.txt`, timeLimitMs + 5000);
+            // Use absolute -cp path — avoids cwd issues with concurrent executions
+            const res = await runCommand(`"${JAVA}" -cp "${tmpDir}" Solution < "${tmpDir}/input.txt"`, timeLimitMs + 5000);
             return { ...res, executionTimeMs: Date.now() - start };
           } finally { cleanup(); }
         });
@@ -223,7 +224,10 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
         if (!ok) {
           return testCases.map(tc => ({ testCaseId: tc.id, stdout: '', stderr: errorMsg, exitCode: 1, executionTimeMs: 0, timedOut: false }));
         }
-        // Run all test cases — throttled by JVM semaphore to prevent OOM
+        // Run all test cases — each uses absolute -cp path, no cd needed
+        // IMPORTANT: do NOT use "cd tmpDir && java -cp ." here — when 3 test cases
+        // run concurrently they share the same cwd which causes ClassNotFoundException
+        // intermittently. Absolute -cp is the only reliable approach.
         return await Promise.all(testCases.map(async (tc, i) => {
           const tcDir = `${tmpDir}/tc_${i}`;
           await fs.mkdir(tcDir, { recursive: true });
@@ -231,7 +235,7 @@ async function executeCodeMulti(code, language, testCases, timeLimitMs = 5000) {
           return withJavaRunSemaphore(async () => {
             const start = Date.now();
             const res = await runCommand(
-              `cd "${tmpDir}" && "${JAVA}" -cp . Solution < "${tcDir}/input.txt"`,
+              `"${JAVA}" -cp "${tmpDir}" Solution < "${tcDir}/input.txt"`,
               timeLimitMs + 5000
             );
             return { testCaseId: tc.id, ...res, executionTimeMs: Date.now() - start };
