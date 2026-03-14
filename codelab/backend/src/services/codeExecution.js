@@ -36,15 +36,20 @@ console.log(JAVAC ? `✅ javac: ${JAVAC}` : '⚠️  javac not found — Java wi
 // On free tier (512MB RAM), running 10 JVMs simultaneously causes OOM kills.
 // Serializing compilation prevents this — runs still execute in parallel after.
 // ── Java semaphores: throttle both compile AND run to prevent OOM ─────────────
-// Free tier = 512MB RAM. Each JVM needs ~80-100MB.
-// MAX 2 compile + MAX 4 run = peak ~600MB — safe.
-// Without throttling: 20 students × 3 test cases = 60 JVMs → OOM kills.
+// Free tier = 512MB RAM. Budget breakdown:
+//   Node.js process:     ~80MB
+//   2× javac (compile):  2 × 60MB = 120MB
+//   3× java  (run):      3 × 85MB = 255MB
+//   DB pool + OS buffer: ~50MB
+//   Total peak:          ~505MB  ← safely under 512MB
+//
+// If MAX_JAVA_RUNS=4: peak = 80 + 120 + 340 + 50 = 590MB → OOM kills
 let activeCompilations = 0;
 const MAX_COMPILATIONS = 2;
 const compileQueue = [];
 
 let activeJavaRuns = 0;
-const MAX_JAVA_RUNS = 4;   // max parallel JVM instances across ALL submissions
+const MAX_JAVA_RUNS = 3;   // 3 max — keeps peak RAM under 512MB
 const javaRunQueue = [];
 
 function withCompileSemaphore(fn) {
